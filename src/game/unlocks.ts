@@ -13,6 +13,7 @@ export function unlockMeta(id: UnlockId | string): { name: string; emoji: string
     return { name: b.name, emoji: b.emoji }
   }
   if (id === 'orders_board') return { name: 'Orders Board', emoji: '📦' }
+  if (id === 'market_board') return { name: 'Market Board', emoji: '🏪' }
   if (id === 'tavern') return { name: 'Tavern', emoji: '🍺' }
   if (id === 'adventure_land') return { name: 'Adventure Land', emoji: '🗺️' }
   if (id in GEAR_BUILDINGS) {

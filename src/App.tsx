@@ -44,10 +44,24 @@ import {
 import { MAX_RECRUITED_NPCS, NPC_LIST, NPCS } from './game/data/npcs'
 import { ORDERS } from './game/data/orders'
 import {
+  MARKET_UNLOCK_LEVEL,
+  marketItemLabel,
+  marketPriceBounds,
+  type MarketItemKind,
+} from './game/data/market'
+import {
   itemSellPrice,
   materialSellPrice,
   seedSellPrice,
 } from './game/data/sellPrices'
+import {
+  getPlayerId,
+  getPlayerName,
+  isSupabaseConfigured,
+  setPlayerName,
+  subscribeToListings,
+  type MarketListing,
+} from './game/marketClient'
 import { unlockLabel } from './game/unlocks'
 import { tabShouldPulse } from './game/guides'
 import {
@@ -97,6 +111,7 @@ const TABS: { id: TabId; label: string; emoji: string }[] = [
   { id: 'animals', label: 'Animals', emoji: '🐄' },
   { id: 'adventure', label: 'Adventure', emoji: '🗺️' },
   { id: 'orders', label: 'Orders', emoji: '📦' },
+  { id: 'market', label: 'Market', emoji: '🏪' },
   { id: 'bag', label: 'Bag', emoji: '🎒' },
   { id: 'shop', label: 'Shop', emoji: '🛒' },
 ]
@@ -604,6 +619,8 @@ function MachinesView() {
   const ownedBuildings = useGame((s) => s.ownedBuildings)
   const machineQueueBonus = useGame((s) => s.machineQueueBonus)
   const guideItemHighlights = useGame((s) => s.guideItemHighlights)
+  const machineScrollTarget = useGame((s) => s.machineScrollTarget)
+  const clearMachineScrollTarget = useGame((s) => s.clearMachineScrollTarget)
   const inventory = useGame((s) => s.inventory)
   const craftQueue = useGame((s) => s.craftQueue)
   const selectedBuilding = useGame((s) => s.selectedBuilding)
@@ -627,6 +644,24 @@ function MachinesView() {
   const queue = craftQueue
     .map((job, index) => ({ job, index }))
     .filter(({ job }) => job.buildingId === open)
+
+  useEffect(() => {
+    if (!machineScrollTarget || !open || !owned) return
+    if (!recipes.some((r) => r.id === machineScrollTarget)) return
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(`machine-recipe-${machineScrollTarget}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      clearMachineScrollTarget()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [
+    machineScrollTarget,
+    open,
+    owned,
+    recipes,
+    clearMachineScrollTarget,
+  ])
 
   return (
     <div className="panel">
@@ -793,7 +828,8 @@ function MachinesView() {
               return (
                 <div
                   key={recipe.id}
-                  className={`recipe-card ${recipeLocked ? 'locked' : ''}`}
+                  id={`machine-recipe-${recipe.id}`}
+                  className={`recipe-card ${recipeLocked ? 'locked' : ''} ${machineScrollTarget === recipe.id || guideItemHighlights.includes(recipe.id) || guideItemHighlights.includes(recipe.output) ? 'guide-pulse-frame' : ''}`}
                 >
                   <div className="recipe-top">
                     <span className="big-emoji">{recipe.emoji}</span>
@@ -1092,6 +1128,366 @@ function OrdersView() {
                 onClick={() => fulfillOrder(active.slot)}
               >
                 Fulfill
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+type PostableItem = {
+  kind: MarketItemKind
+  id: string
+  qty: number
+  emoji: string
+  name: string
+}
+
+function buildPostableItems(
+  inventory: Partial<Record<ItemId, number>>,
+  seeds: Partial<Record<CropId, number>>,
+  materials: Partial<Record<MaterialId, number>>,
+): PostableItem[] {
+  const items: PostableItem[] = []
+  for (const [id, qty] of Object.entries(inventory)) {
+    if ((qty ?? 0) <= 0) continue
+    const meta = ITEM_META[id as ItemId]
+    items.push({
+      kind: 'goods',
+      id,
+      qty: qty ?? 0,
+      emoji: meta?.emoji ?? '📦',
+      name: meta?.name ?? id,
+    })
+  }
+  for (const [id, qty] of Object.entries(seeds)) {
+    if ((qty ?? 0) <= 0) continue
+    const crop = CROPS[id as CropId]
+    items.push({
+      kind: 'seeds',
+      id,
+      qty: qty ?? 0,
+      emoji: crop?.emoji ?? '🌱',
+      name: `${crop?.name ?? id} seeds`,
+    })
+  }
+  for (const [id, qty] of Object.entries(materials)) {
+    if ((qty ?? 0) <= 0) continue
+    const meta = MATERIAL_META[id as MaterialId]
+    items.push({
+      kind: 'materials',
+      id,
+      qty: qty ?? 0,
+      emoji: meta?.emoji ?? '✨',
+      name: meta?.name ?? id,
+    })
+  }
+  return items.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function MarketNameModal({
+  onSave,
+}: {
+  onSave: (name: string) => void
+}) {
+  const [name, setName] = useState('')
+
+  return (
+    <div className="popup-backdrop" role="presentation">
+      <div
+        className="popup-card kind-market_name"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="market-name-title"
+      >
+        <h3 id="market-name-title">Welcome to the Market</h3>
+        <p className="muted">Choose a display name for trading with other players.</p>
+        <input
+          className="market-input"
+          type="text"
+          maxLength={24}
+          placeholder="Your farmer name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+        />
+        <button
+          type="button"
+          className="btn full"
+          disabled={name.trim().length < 2}
+          onClick={() => onSave(name.trim())}
+        >
+          Enter Market
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function MarketView() {
+  const inventory = useGame((s) => s.inventory)
+  const seeds = useGame((s) => s.seeds)
+  const materials = useGame((s) => s.materials)
+  const coins = useGame((s) => s.coins)
+  const xp = useGame((s) => s.xp)
+  const isMarketOpen = useGame((s) => s.isMarketOpen)
+  const createMarketListing = useGame((s) => s.createMarketListing)
+  const buyMarketListing = useGame((s) => s.buyMarketListing)
+  const cancelMarketListing = useGame((s) => s.cancelMarketListing)
+  const syncMarketPayouts = useGame((s) => s.syncMarketPayouts)
+  const { level } = xpProgress(xp)
+
+  const [listings, setListings] = useState<MarketListing[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [needsName, setNeedsName] = useState(() => !getPlayerName())
+  const [postIndex, setPostIndex] = useState(0)
+  const [postQty, setPostQty] = useState(1)
+  const [postPrice, setPostPrice] = useState(1)
+  const [busy, setBusy] = useState(false)
+
+  const playerId = getPlayerId()
+  const postable = buildPostableItems(inventory, seeds, materials)
+  const selectedPost = postable[postIndex] ?? null
+  const priceBounds = selectedPost
+    ? marketPriceBounds(selectedPost.kind, selectedPost.id)
+    : null
+
+  useEffect(() => {
+    if (!isMarketOpen()) return
+    void syncMarketPayouts()
+  }, [isMarketOpen, syncMarketPayouts])
+
+  useEffect(() => {
+    if (!isMarketOpen() || !isSupabaseConfigured()) return
+    setLoadError(null)
+    return subscribeToListings(setListings, (err) => setLoadError(err.message))
+  }, [isMarketOpen])
+
+  useEffect(() => {
+    if (!selectedPost || !priceBounds) return
+    setPostQty(1)
+    setPostPrice(priceBounds.base)
+  }, [selectedPost?.kind, selectedPost?.id, priceBounds?.base])
+
+  if (!isMarketOpen()) {
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <h2>Market</h2>
+          <p>
+            🔒 Reach <strong>Level {MARKET_UNLOCK_LEVEL}</strong> to unlock the
+            Market Board.
+          </p>
+          <p className="muted">You are Level {level}.</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (needsName) {
+    return (
+      <MarketNameModal
+        onSave={(name) => {
+          setPlayerName(name)
+          setNeedsName(false)
+        }}
+      />
+    )
+  }
+
+  if (!isSupabaseConfigured()) {
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <h2>Market</h2>
+          <p className="muted">
+            Market is not configured. Add VITE_SUPABASE_URL and
+            VITE_SUPABASE_PUBLISHABLE_KEY to your environment.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  const myListings = listings.filter((l) => l.seller_id === playerId)
+  const browseListings = listings.filter((l) => l.seller_id !== playerId)
+
+  const handlePost = async () => {
+    if (!selectedPost || busy) return
+    setBusy(true)
+    await createMarketListing(
+      selectedPost.kind,
+      selectedPost.id,
+      postQty,
+      postPrice,
+    )
+    setBusy(false)
+  }
+
+  const handleBuy = async (listingId: string) => {
+    if (busy) return
+    setBusy(true)
+    await buyMarketListing(listingId)
+    setBusy(false)
+  }
+
+  const handleCancel = async (listingId: string) => {
+    if (busy) return
+    setBusy(true)
+    await cancelMarketListing(listingId)
+    setBusy(false)
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Market</h2>
+        <p>Trade goods, seeds, and materials with other farmers.</p>
+        <p className="muted">Your coins: 🪙 {coins}</p>
+      </div>
+
+      {loadError && (
+        <p className="market-error" role="alert">
+          {loadError}
+        </p>
+      )}
+
+      <h3 className="section-label">Browse listings</h3>
+      <div className="card-list">
+        {browseListings.length === 0 && (
+          <p className="muted">No listings yet — be the first to post!</p>
+        )}
+        {browseListings.map((listing) => {
+          const meta = marketItemLabel(listing.item_kind, listing.item_id)
+          const total = listing.quantity * listing.price_per_unit
+          const canBuy = coins >= total
+          return (
+            <div key={listing.id} className="recipe-card">
+              <div className="recipe-top">
+                <span className="big-emoji">{meta.emoji}</span>
+                <div>
+                  <strong>
+                    {listing.quantity}× {meta.name}
+                  </strong>
+                  <p className="muted">
+                    🪙 {listing.price_per_unit}/ea · {total} total · by{' '}
+                    {listing.seller_name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn full"
+                disabled={!canBuy || busy}
+                onClick={() => void handleBuy(listing.id)}
+              >
+                {canBuy ? `Buy · 🪙 ${total}` : `Need 🪙 ${total}`}
+              </button>
+            </div>
+          )
+        })}
+      </div>
+
+      <h3 className="section-label">Post a listing</h3>
+      {postable.length === 0 ? (
+        <p className="muted">Nothing to sell — stock your bag first.</p>
+      ) : (
+        <div className="recipe-card market-post">
+          <label className="market-field">
+            Item
+            <select
+              className="market-input"
+              value={postIndex}
+              onChange={(e) => setPostIndex(Number(e.target.value))}
+            >
+              {postable.map((item, i) => (
+                <option key={`${item.kind}-${item.id}`} value={i}>
+                  {item.emoji} {item.name} ({item.qty})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="market-field">
+            Quantity
+            <input
+              className="market-input"
+              type="number"
+              min={1}
+              max={selectedPost?.qty ?? 1}
+              value={postQty}
+              onChange={(e) =>
+                setPostQty(
+                  Math.max(
+                    1,
+                    Math.min(
+                      selectedPost?.qty ?? 1,
+                      Number(e.target.value) || 1,
+                    ),
+                  ),
+                )
+              }
+            />
+          </label>
+          <label className="market-field">
+            Price per unit
+            {priceBounds && (
+              <span className="muted">
+                {' '}
+                ({priceBounds.min}–{priceBounds.max})
+              </span>
+            )}
+            <input
+              className="market-input"
+              type="number"
+              min={priceBounds?.min ?? 1}
+              max={priceBounds?.max ?? 9999}
+              value={postPrice}
+              onChange={(e) =>
+                setPostPrice(Math.max(1, Number(e.target.value) || 1))
+              }
+            />
+          </label>
+          <button
+            type="button"
+            className="btn full"
+            disabled={busy || !selectedPost}
+            onClick={() => void handlePost()}
+          >
+            Post listing
+          </button>
+        </div>
+      )}
+
+      <h3 className="section-label">My listings</h3>
+      <div className="card-list">
+        {myListings.length === 0 && (
+          <p className="muted">You have no active listings.</p>
+        )}
+        {myListings.map((listing) => {
+          const meta = marketItemLabel(listing.item_kind, listing.item_id)
+          const total = listing.quantity * listing.price_per_unit
+          return (
+            <div key={listing.id} className="recipe-card">
+              <div className="recipe-top">
+                <span className="big-emoji">{meta.emoji}</span>
+                <div>
+                  <strong>
+                    {listing.quantity}× {meta.name}
+                  </strong>
+                  <p className="muted">
+                    🪙 {listing.price_per_unit}/ea · {total} total
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn full secondary"
+                disabled={busy}
+                onClick={() => void handleCancel(listing.id)}
+              >
+                Cancel listing
               </button>
             </div>
           )
@@ -2009,10 +2405,15 @@ function TabNav() {
 export default function App() {
   const tab = useGame((s) => s.tab)
   const darkMode = useGame((s) => s.darkMode)
+  const syncMarketPayouts = useGame((s) => s.syncMarketPayouts)
 
   useEffect(() => {
     document.documentElement.classList.toggle('theme-dark', darkMode)
   }, [darkMode])
+
+  useEffect(() => {
+    void syncMarketPayouts()
+  }, [syncMarketPayouts])
 
   return (
     <div className={`app-shell ${darkMode ? 'theme-dark' : ''}`}>
@@ -2027,6 +2428,7 @@ export default function App() {
           {tab === 'animals' && <AnimalsView />}
           {tab === 'adventure' && <AdventureView />}
           {tab === 'orders' && <OrdersView />}
+          {tab === 'market' && <MarketView />}
           {tab === 'bag' && <BagView />}
           {tab === 'shop' && <ShopView />}
         </main>

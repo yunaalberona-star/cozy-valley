@@ -27,6 +27,19 @@ import {
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
 import { ORDERS } from './data/orders'
 import { itemSellPrice, materialSellPrice, seedSellPrice } from './data/sellPrices'
+import { MARKET_UNLOCK_LEVEL, isValidMarketPrice } from './data/market'
+import type { MarketItemKind } from './data/market'
+import {
+  MarketError,
+  buyListing,
+  cancelListing,
+  createListing,
+  fetchListingById,
+  getPlayerId,
+  getPlayerName,
+  isSupabaseConfigured,
+  syncPayouts,
+} from './marketClient'
 import { mergeUnlockGuides, tabShouldPulse } from './guides'
 import {
   adoptLegacySaveIfNeeded,
@@ -309,9 +322,7 @@ function applyXpGain(
       nextQueue,
       unlockPopup(
         levelIds,
-        levelIds.includes('orders_board')
-          ? `Reached Level ${ORDERS_UNLOCK_LEVEL}!`
-          : `Reached Level ${TAVERN_UNLOCK_LEVEL}!`,
+        levelUnlockSubtitle(levelIds),
       ),
     )
     if (levelIds.includes('orders_board') && activeOrders.length === 0) {
@@ -334,6 +345,7 @@ function applyXpGain(
 
 const LEVEL_FEATURE_UNLOCKS: { level: number; ids: UnlockId[] }[] = [
   { level: ORDERS_UNLOCK_LEVEL, ids: ['orders_board'] },
+  { level: MARKET_UNLOCK_LEVEL, ids: ['market_board'] },
   {
     level: TAVERN_UNLOCK_LEVEL,
     ids: [
@@ -345,6 +357,19 @@ const LEVEL_FEATURE_UNLOCKS: { level: number; ids: UnlockId[] }[] = [
     ],
   },
 ]
+
+function levelUnlockSubtitle(levelIds: UnlockId[]): string {
+  if (levelIds.includes('orders_board')) {
+    return `Reached Level ${ORDERS_UNLOCK_LEVEL}!`
+  }
+  if (levelIds.includes('market_board')) {
+    return `Reached Level ${MARKET_UNLOCK_LEVEL}!`
+  }
+  if (levelIds.includes('tavern')) {
+    return `Reached Level ${TAVERN_UNLOCK_LEVEL}!`
+  }
+  return 'New feature unlocked!'
+}
 
 function levelUnlocksCrossing(oldLevel: number, newLevel: number): UnlockId[] {
   const ids: UnlockId[] = []
@@ -674,6 +699,57 @@ function patchUnlockTransition(
   }
 }
 
+function addMarketItems(
+  itemKind: MarketItemKind,
+  itemId: string,
+  qty: number,
+  state: Pick<GameState, 'inventory' | 'seeds' | 'materials'>,
+): Pick<GameState, 'inventory' | 'seeds' | 'materials'> {
+  if (itemKind === 'goods') {
+    return { ...state, inventory: addItem(state.inventory, itemId as ItemId, qty) }
+  }
+  if (itemKind === 'seeds') {
+    return {
+      ...state,
+      seeds: {
+        ...state.seeds,
+        [itemId as CropId]: (state.seeds[itemId as CropId] ?? 0) + qty,
+      },
+    }
+  }
+  return {
+    ...state,
+    materials: addMaterial(state.materials, itemId as MaterialId, qty),
+  }
+}
+
+function takeMarketItems(
+  itemKind: MarketItemKind,
+  itemId: string,
+  qty: number,
+  state: Pick<GameState, 'inventory' | 'seeds' | 'materials'>,
+): Pick<GameState, 'inventory' | 'seeds' | 'materials'> | null {
+  if (itemKind === 'goods') {
+    if ((state.inventory[itemId as ItemId] ?? 0) < qty) return null
+    return {
+      ...state,
+      inventory: takeItems(state.inventory, { [itemId as ItemId]: qty }),
+    }
+  }
+  if (itemKind === 'seeds') {
+    if ((state.seeds[itemId as CropId] ?? 0) < qty) return null
+    return {
+      ...state,
+      seeds: takeSeeds(state.seeds, { [itemId as CropId]: qty }),
+    }
+  }
+  if ((state.materials[itemId as MaterialId] ?? 0) < qty) return null
+  return {
+    ...state,
+    materials: takeMaterial(state.materials, { [itemId as MaterialId]: qty }),
+  }
+}
+
 export interface GameState {
   coins: number
   xp: number
@@ -711,6 +787,7 @@ export interface GameState {
   contextGuideTab: TabId | null
   darkMode: boolean
   shopScrollTarget: CropId | null
+  machineScrollTarget: string | null
 
   setTab: (tab: TabId) => void
   selectCrop: (id: CropId) => void
@@ -725,6 +802,7 @@ export interface GameState {
   isUnlocked: (id: UnlockId) => boolean
   isBuildingOwned: (id: BuildingId) => boolean
   isOrdersOpen: () => boolean
+  isMarketOpen: () => boolean
   isCropAvailable: (id: CropId) => boolean
   isTavernOpen: () => boolean
   machineQueueCapacity: (id: BuildingId) => number
@@ -732,6 +810,7 @@ export interface GameState {
   navigateToItem: (itemId: ItemId, needQty?: number, force?: boolean) => void
   navigateToMissionGoal: (goal: MissionGoal) => void
   clearShopScrollTarget: () => void
+  clearMachineScrollTarget: () => void
 
   buySeed: (id: CropId, amount?: number) => void
   plant: (plotIndex: number) => void
@@ -749,6 +828,16 @@ export interface GameState {
 
   fulfillOrder: (slot: number) => void
   refreshOrders: () => void
+
+  createMarketListing: (
+    itemKind: MarketItemKind,
+    itemId: string,
+    qty: number,
+    pricePerUnit: number,
+  ) => Promise<boolean>
+  buyMarketListing: (listingId: string) => Promise<boolean>
+  cancelMarketListing: (listingId: string) => Promise<boolean>
+  syncMarketPayouts: () => Promise<void>
 
   sellGoods: (id: ItemId, qty?: number) => void
   sellSeeds: (id: CropId, qty?: number) => void
@@ -816,6 +905,7 @@ const initial = () => {
     contextGuideTab: null as TabId | null,
     darkMode: false,
     shopScrollTarget: null as CropId | null,
+    machineScrollTarget: null as string | null,
   }
 }
 
@@ -911,6 +1001,7 @@ export const useGame = create<GameState>()(
       isUnlocked: (id) => get().unlocked.includes(id),
       isBuildingOwned: (id) => get().ownedBuildings.includes(id),
       isOrdersOpen: () => get().unlocked.includes('orders_board'),
+      isMarketOpen: () => get().unlocked.includes('market_board'),
       isCropAvailable: (id) => cropAvailable(id, get().unlocked),
       isTavernOpen: () => get().unlocked.includes('tavern'),
       machineQueueCapacity: (id) =>
@@ -930,6 +1021,7 @@ export const useGame = create<GameState>()(
               tab: 'farm',
               selectedCrop: itemId,
               shopScrollTarget: null,
+              machineScrollTarget: null,
               toast: `Selected ${crop.name} seeds — tap empty soil to plant`,
             })
             return
@@ -938,6 +1030,7 @@ export const useGame = create<GameState>()(
             set({
               tab: 'shop',
               shopScrollTarget: itemId,
+              machineScrollTarget: null,
               guideItemHighlights: [
                 ...new Set([...s.guideItemHighlights, itemId]),
               ],
@@ -951,10 +1044,15 @@ export const useGame = create<GameState>()(
 
         const machineId = machineBuildingForItem(itemId, s.unlocked)
         if (machineId) {
+          const recipe = recipeProducing(itemId)
           set({
             tab: 'machines',
             selectedBuilding: machineId,
             shopScrollTarget: null,
+            machineScrollTarget: recipe?.id ?? null,
+            guideItemHighlights: [
+              ...new Set([...s.guideItemHighlights, itemId]),
+            ],
             toast: `Make ${meta.name} at the ${BUILDINGS[machineId].name}`,
           })
           return
@@ -966,6 +1064,7 @@ export const useGame = create<GameState>()(
             tab: 'animals',
             selectedAnimalBuilding: animalBuilding,
             shopScrollTarget: null,
+            machineScrollTarget: null,
             toast: `Collect ${meta.name} from your animals`,
           })
           return
@@ -1023,6 +1122,8 @@ export const useGame = create<GameState>()(
       },
 
       clearShopScrollTarget: () => set({ shopScrollTarget: null }),
+
+      clearMachineScrollTarget: () => set({ machineScrollTarget: null }),
 
       track: (kind, target, amount = 1) => {
         const s = get()
@@ -1488,6 +1589,187 @@ export const useGame = create<GameState>()(
           activeOrders: pickOrders(level),
           toast: 'Orders refreshed',
         })
+      },
+
+      createMarketListing: async (itemKind, itemId, qty, pricePerUnit) => {
+        const amount = Math.max(1, Math.floor(qty))
+        if (!get().isMarketOpen()) {
+          set({ toast: `Market unlocks at Level ${MARKET_UNLOCK_LEVEL}` })
+          return false
+        }
+        if (!isSupabaseConfigured()) {
+          set({
+            toast: 'Market not configured — add Supabase env vars to .env.local',
+          })
+          return false
+        }
+        const sellerName = getPlayerName()
+        if (!sellerName) {
+          set({ toast: 'Set your market name first' })
+          return false
+        }
+        if (!isValidMarketPrice(itemKind, itemId, pricePerUnit)) {
+          set({ toast: 'Price must be 50%–200% of the sell value' })
+          return false
+        }
+        const s = get()
+        const taken = takeMarketItems(itemKind, itemId, amount, s)
+        if (!taken) {
+          set({ toast: 'Not enough items to list' })
+          return false
+        }
+        set({
+          inventory: taken.inventory,
+          seeds: taken.seeds,
+          materials: taken.materials,
+        })
+        try {
+          await createListing(
+            getPlayerId(),
+            sellerName,
+            itemKind,
+            itemId,
+            amount,
+            pricePerUnit,
+          )
+          set({ toast: 'Listing posted on the Market Board!' })
+          return true
+        } catch (err) {
+          const rollback = addMarketItems(itemKind, itemId, amount, get())
+          set({
+            ...rollback,
+            toast:
+              err instanceof MarketError
+                ? err.message
+                : 'Failed to post listing',
+          })
+          return false
+        }
+      },
+
+      buyMarketListing: async (listingId) => {
+        if (!get().isMarketOpen()) {
+          set({ toast: `Market unlocks at Level ${MARKET_UNLOCK_LEVEL}` })
+          return false
+        }
+        if (!isSupabaseConfigured()) {
+          set({
+            toast: 'Market not configured — add Supabase env vars to .env.local',
+          })
+          return false
+        }
+        const buyerName = getPlayerName()
+        if (!buyerName) {
+          set({ toast: 'Set your market name first' })
+          return false
+        }
+        const buyerId = getPlayerId()
+        try {
+          const listing = await fetchListingById(listingId)
+          if (!listing || listing.status !== 'active') {
+            set({ toast: 'Listing no longer available' })
+            return false
+          }
+          if (new Date(listing.expires_at).getTime() <= Date.now()) {
+            set({ toast: 'This listing has expired' })
+            return false
+          }
+          if (listing.seller_id === buyerId) {
+            set({ toast: "You can't buy your own listing" })
+            return false
+          }
+          const total = listing.quantity * listing.price_per_unit
+          const s = get()
+          if (s.coins < total) {
+            set({ toast: `Need ${total} coins` })
+            return false
+          }
+          set({ coins: s.coins - total })
+          const added = addMarketItems(
+            listing.item_kind,
+            listing.item_id,
+            listing.quantity,
+            get(),
+          )
+          set(added)
+          try {
+            await buyListing(listing, buyerId, buyerName)
+            set({
+              toast: `Purchased listing · 🪙 ${total}`,
+            })
+            get().track('own_coins', undefined, get().coins)
+            return true
+          } catch (err) {
+            const rollback = takeMarketItems(
+              listing.item_kind,
+              listing.item_id,
+              listing.quantity,
+              get(),
+            )
+            set({
+              coins: get().coins + total,
+              ...(rollback ?? get()),
+              toast:
+                err instanceof MarketError ? err.message : 'Purchase failed',
+            })
+            return false
+          }
+        } catch (err) {
+          set({
+            toast:
+              err instanceof MarketError ? err.message : 'Purchase failed',
+          })
+          return false
+        }
+      },
+
+      cancelMarketListing: async (listingId) => {
+        if (!get().isMarketOpen()) {
+          set({ toast: `Market unlocks at Level ${MARKET_UNLOCK_LEVEL}` })
+          return false
+        }
+        if (!isSupabaseConfigured()) {
+          set({
+            toast: 'Market not configured — add Supabase env vars to .env.local',
+          })
+          return false
+        }
+        try {
+          const listing = await cancelListing(listingId, getPlayerId())
+          const returned = addMarketItems(
+            listing.item_kind,
+            listing.item_id,
+            listing.quantity,
+            get(),
+          )
+          set({
+            ...returned,
+            toast: 'Listing cancelled — items returned',
+          })
+          return true
+        } catch (err) {
+          set({
+            toast:
+              err instanceof MarketError ? err.message : 'Cancel failed',
+          })
+          return false
+        }
+      },
+
+      syncMarketPayouts: async () => {
+        if (!isSupabaseConfigured()) return
+        try {
+          const amount = await syncPayouts(getPlayerId())
+          if (amount > 0) {
+            set({
+              coins: get().coins + amount,
+              toast: `Market sales · +🪙 ${amount}`,
+            })
+            get().track('own_coins', undefined, get().coins)
+          }
+        } catch {
+          // Missing tables or offline — ignore on background sync
+        }
       },
 
       sellGoods: (id, qty = 1) => {
@@ -2065,4 +2347,4 @@ export function missionGoalProgress(
   return progress[`${parentId}:${goalId}`] ?? 0
 }
 
-export { MAX_PLOTS, EVENTS, BUILDINGS, TAVERN_UNLOCK_LEVEL, ORDERS_UNLOCK_LEVEL, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS }
+export { MAX_PLOTS, EVENTS, BUILDINGS, TAVERN_UNLOCK_LEVEL, ORDERS_UNLOCK_LEVEL, MARKET_UNLOCK_LEVEL, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS }

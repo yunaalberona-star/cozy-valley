@@ -113,6 +113,7 @@ export type UnlockId =
   | AnimalBuildingId
   | GearBuildingId
   | 'orders_board'
+  | 'market_board'
   | 'tavern'
   | 'adventure_land'
 
@@ -122,6 +123,7 @@ export type TabId =
   | 'animals'
   | 'missions'
   | 'orders'
+  | 'market'
   | 'bag'
   | 'shop'
   | 'adventure'

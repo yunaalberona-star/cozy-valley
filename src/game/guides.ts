@@ -32,6 +32,7 @@ export function guideTabsForUnlock(id: UnlockId): TabId[] {
     tabs.push('adventure')
   }
   if (id === 'orders_board') tabs.push('orders')
+  if (id === 'market_board') tabs.push('market')
   if (guideCropsForUnlock(id).length > 0) tabs.push('shop')
   return tabs
 }

@@ -1279,3 +1279,37 @@ html.theme-dark .toast {
     transform: scale(1) translateY(0);
   }
 }
+
+.market-input {
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 2px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+}
+
+.market-field {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.market-post {
+  margin-bottom: 12px;
+}
+
+.market-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger, #c44) 12%, transparent);
+  color: var(--danger, #b33);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
