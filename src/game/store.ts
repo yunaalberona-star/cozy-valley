@@ -1001,7 +1001,13 @@ export const useGame = create<GameState>()(
       isUnlocked: (id) => get().unlocked.includes(id),
       isBuildingOwned: (id) => get().ownedBuildings.includes(id),
       isOrdersOpen: () => get().unlocked.includes('orders_board'),
-      isMarketOpen: () => get().unlocked.includes('market_board'),
+      isMarketOpen: () => {
+        const s = get()
+        return (
+          s.unlocked.includes('market_board') ||
+          levelFromXp(s.xp) >= MARKET_UNLOCK_LEVEL
+        )
+      },
       isCropAvailable: (id) => cropAvailable(id, get().unlocked),
       isTavernOpen: () => get().unlocked.includes('tavern'),
       machineQueueCapacity: (id) =>
@@ -2233,7 +2239,9 @@ export const useGame = create<GameState>()(
         ...mergePersistedSlice(persisted, persistedDefaults()),
       }),
       onRehydrateStorage: () => (state, error) => {
-        if (error || !state?.activeMissionId) return
+        if (error || !state) return
+        state.unlocked = syncLevelUnlocks(state.xp, state.unlocked ?? [])
+        if (!state.activeMissionId) return
         const mission = MISSION_BY_ID[state.activeMissionId]
         if (!mission) return
         state.missionProgress = computeMissionProgressFromState(
