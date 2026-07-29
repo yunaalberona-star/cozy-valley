@@ -1303,8 +1303,10 @@ function MarketView() {
         <div className="panel-head">
           <h2>Market</h2>
           <p className="muted">
-            Market is not configured. Add VITE_SUPABASE_URL and
-            VITE_SUPABASE_PUBLISHABLE_KEY to your environment.
+            Market backend is not configured on this deploy. In Vercel, add{' '}
+            <strong>VITE_SUPABASE_URL</strong> and{' '}
+            <strong>VITE_SUPABASE_PUBLISHABLE_KEY</strong>, then redeploy (env
+            vars only apply after a new build).
           </p>
         </div>
       </div>

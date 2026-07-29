@@ -68,26 +68,82 @@ export function setPlayerName(name: string): void {
   }
 }
 
+function readEnv(name: string): string {
+  const value = import.meta.env[name]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeSupabaseUrl(raw: string): string {
+  if (!raw) return ''
+  let url = raw.trim()
+  if (url.startsWith('sb_publishable_') || url.startsWith('sb_secret_') || url.startsWith('eyJ')) {
+    throw new MarketError(
+      'VITE_SUPABASE_URL looks like an API key. Set it to https://YOUR_PROJECT.supabase.co',
+      'invalid_url',
+    )
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url.replace(/^\/+/, '')}`
+  }
+  try {
+    const parsed = new URL(url)
+    if (!parsed.hostname.endsWith('.supabase.co')) {
+      throw new MarketError(
+        `Invalid Supabase URL "${raw}". Use https://YOUR_PROJECT.supabase.co`,
+        'invalid_url',
+      )
+    }
+    return `${parsed.protocol}//${parsed.host}`
+  } catch (err) {
+    if (err instanceof MarketError) throw err
+    throw new MarketError(
+      `Invalid Supabase URL "${raw}". Use https://YOUR_PROJECT.supabase.co`,
+      'invalid_url',
+    )
+  }
+}
+
+function resolveSupabaseConfig(): { url: string; key: string } | null {
+  const rawUrl = readEnv('VITE_SUPABASE_URL')
+  const key =
+    readEnv('VITE_SUPABASE_PUBLISHABLE_KEY') ||
+    readEnv('VITE_SUPABASE_ANON_KEY')
+
+  if (!rawUrl || !key) return null
+
+  return {
+    url: normalizeSupabaseUrl(rawUrl),
+    key,
+  }
+}
+
 export function isSupabaseConfigured(): boolean {
-  const url = import.meta.env.VITE_SUPABASE_URL
-  const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
-  return Boolean(url && key)
+  try {
+    return resolveSupabaseConfig() !== null
+  } catch {
+    return false
+  }
 }
 
 let client: SupabaseClient | null = null
 
 function getClient(): SupabaseClient {
-  if (!isSupabaseConfigured()) {
-    throw new MarketError(
-      'Market is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.',
-      'not_configured',
-    )
+  let config: { url: string; key: string }
+  try {
+    const resolved = resolveSupabaseConfig()
+    if (!resolved) {
+      throw new MarketError(
+        'Market is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY on Vercel, then redeploy.',
+        'not_configured',
+      )
+    }
+    config = resolved
+  } catch (err) {
+    if (err instanceof MarketError) throw err
+    throw new MarketError('Invalid Supabase configuration.', 'invalid_url')
   }
   if (!client) {
-    client = createClient(
-      import.meta.env.VITE_SUPABASE_URL!,
-      import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY!,
-    )
+    client = createClient(config.url, config.key)
   }
   return client
 }
