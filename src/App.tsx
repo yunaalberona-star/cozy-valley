@@ -1190,9 +1190,15 @@ function buildPostableItems(
   return items.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function MarketNameModal({
+function PlayerNameModal({
+  title,
+  subtitle,
+  buttonLabel,
   onSave,
 }: {
+  title: string
+  subtitle: string
+  buttonLabel: string
   onSave: (name: string) => void
 }) {
   const [name, setName] = useState('')
@@ -1203,10 +1209,10 @@ function MarketNameModal({
         className="popup-card kind-market_name"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="market-name-title"
+        aria-labelledby="player-name-title"
       >
-        <h3 id="market-name-title">Welcome to the Market</h3>
-        <p className="muted">Choose a display name for trading with other players.</p>
+        <h3 id="player-name-title">{title}</h3>
+        <p className="muted">{subtitle}</p>
         <input
           className="market-input"
           type="text"
@@ -1222,32 +1228,74 @@ function MarketNameModal({
           disabled={name.trim().length < 2}
           onClick={() => onSave(name.trim())}
         >
-          Enter Market
+          {buttonLabel}
         </button>
       </div>
     </div>
   )
 }
 
-function MarketChatPanel() {
+function GlobalChatDock() {
+  const xp = useGame((s) => s.xp)
+  const isMarketOpen = useGame((s) => s.isMarketOpen)
+  const { level } = xpProgress(xp)
+  const chatUnlocked = isMarketOpen()
+
+  const [expanded, setExpanded] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
+  const [needsName, setNeedsName] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const playerId = getPlayerId()
   const playerName = getPlayerName() ?? 'Farmer'
 
   useEffect(() => {
-    if (!isSupabaseConfigured()) return
+    if (!chatUnlocked || !isSupabaseConfigured()) return
     setChatError(null)
     return subscribeToChat(setMessages, (err) => setChatError(err.message))
-  }, [])
+  }, [chatUnlocked])
 
   useEffect(() => {
+    if (!expanded) return
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages.length])
+  }, [messages.length, expanded])
+
+  useEffect(() => {
+    if (!expanded) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExpanded(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [expanded])
+
+  const latest = messages[messages.length - 1]
+  const preview = latest
+    ? `${latest.player_name}: ${latest.body}`
+    : chatUnlocked
+      ? 'Tap to chat with other farmers'
+      : `Chat unlocks at Level ${MARKET_UNLOCK_LEVEL}`
+
+  const handleBarClick = () => {
+    if (!chatUnlocked) {
+      useGame.setState({
+        toast: `Chat unlocks at Level ${MARKET_UNLOCK_LEVEL} (you are Level ${level})`,
+      })
+      return
+    }
+    if (!isSupabaseConfigured()) {
+      useGame.setState({ toast: 'Chat is not configured on this deploy' })
+      return
+    }
+    if (!getPlayerName()) {
+      setNeedsName(true)
+      return
+    }
+    setExpanded((open) => !open)
+  }
 
   const handleSend = async () => {
     const text = draft.trim()
@@ -1265,48 +1313,93 @@ function MarketChatPanel() {
   }
 
   return (
-    <section className="market-chat">
-      <h3 className="section-label">Farmer chat</h3>
-      <p className="muted">Talk with other testers while you trade.</p>
-      {chatError && (
-        <p className="market-error" role="alert">
-          {chatError}
-        </p>
-      )}
-      <div ref={scrollRef} className="market-chat-log" aria-live="polite">
-        {messages.length === 0 && (
-          <p className="muted">No messages yet — say hello!</p>
-        )}
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`market-chat-row ${msg.player_id === playerId ? 'mine' : ''}`}
-          >
-            <strong>{msg.player_name}</strong>
-            <span>{msg.body}</span>
-          </div>
-        ))}
-      </div>
-      <form
-        className="market-chat-form"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void handleSend()
-        }}
-      >
-        <input
-          className="market-input"
-          type="text"
-          maxLength={280}
-          placeholder="Type a message…"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+    <div className={`chat-dock ${expanded ? 'expanded' : ''}`}>
+      {needsName && (
+        <PlayerNameModal
+          title="Join the valley chat"
+          subtitle="Choose a display name so other farmers know who you are."
+          buttonLabel="Start chatting"
+          onSave={(name) => {
+            setPlayerName(name)
+            setNeedsName(false)
+            setExpanded(true)
+          }}
         />
-        <button type="submit" className="btn" disabled={sending || !draft.trim()}>
-          Send
-        </button>
-      </form>
-    </section>
+      )}
+      {expanded && chatUnlocked && (
+        <div className="chat-dock-panel">
+          <div className="chat-dock-panel-head">
+            <strong>Valley chat</strong>
+            <button
+              type="button"
+              className="btn ghost tiny"
+              onClick={() => setExpanded(false)}
+            >
+              Close
+            </button>
+          </div>
+          {chatError && (
+            <p className="market-error" role="alert">
+              {chatError}
+            </p>
+          )}
+          <div ref={scrollRef} className="chat-dock-log" aria-live="polite">
+            {messages.length === 0 && (
+              <p className="muted">No messages yet — say hello!</p>
+            )}
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`chat-dock-row ${msg.player_id === playerId ? 'mine' : ''}`}
+              >
+                <strong>{msg.player_name}</strong>
+                <span>{msg.body}</span>
+              </div>
+            ))}
+          </div>
+          <form
+            className="chat-dock-form"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void handleSend()
+            }}
+          >
+            <input
+              className="market-input"
+              type="text"
+              maxLength={280}
+              placeholder="Type a message…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="btn"
+              disabled={sending || !draft.trim()}
+            >
+              Send
+            </button>
+          </form>
+        </div>
+      )}
+      <button
+        type="button"
+        className={`chat-dock-bar ${chatUnlocked ? '' : 'locked'}`}
+        onClick={handleBarClick}
+        aria-expanded={expanded}
+        aria-label={chatUnlocked ? 'Farmer chat' : `Chat unlocks at level ${MARKET_UNLOCK_LEVEL}`}
+      >
+        <span className="chat-dock-icon" aria-hidden>
+          💬
+        </span>
+        <span className="chat-dock-preview">{preview}</span>
+        {chatUnlocked && (
+          <span className="chat-dock-chevron" aria-hidden>
+            {expanded ? '▼' : '▲'}
+          </span>
+        )}
+      </button>
+    </div>
   )
 }
 
@@ -1373,7 +1466,10 @@ function MarketView() {
 
   if (needsName) {
     return (
-      <MarketNameModal
+      <PlayerNameModal
+        title="Welcome to the Market"
+        subtitle="Choose a display name for trading with other players."
+        buttonLabel="Enter Market"
         onSave={(name) => {
           setPlayerName(name)
           setNeedsName(false)
@@ -1499,8 +1595,6 @@ function MarketView() {
               )
             })}
           </div>
-
-          <MarketChatPanel />
         </>
       )}
 
@@ -2550,7 +2644,10 @@ export default function App() {
           {tab === 'bag' && <BagView />}
           {tab === 'shop' && <ShopView />}
         </main>
-        <TabNav />
+        <div className="app-bottom">
+          <GlobalChatDock />
+          <TabNav />
+        </div>
         <Toast />
         <CelebrationPopup />
       </div>
