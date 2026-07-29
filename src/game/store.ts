@@ -729,7 +729,8 @@ export interface GameState {
   isTavernOpen: () => boolean
   machineQueueCapacity: (id: BuildingId) => number
 
-  navigateToItem: (itemId: ItemId, needQty?: number) => void
+  navigateToItem: (itemId: ItemId, needQty?: number, force?: boolean) => void
+  navigateToMissionGoal: (goal: MissionGoal) => void
   clearShopScrollTarget: () => void
 
   buySeed: (id: CropId, amount?: number) => void
@@ -915,11 +916,11 @@ export const useGame = create<GameState>()(
       machineQueueCapacity: (id) =>
         machineQueueSize(id, get().machineQueueBonus),
 
-      navigateToItem: (itemId, needQty = 1) => {
+      navigateToItem: (itemId, needQty = 1, force = false) => {
         const s = get()
         const meta = ITEM_META[itemId]
         const have = s.inventory[itemId] ?? 0
-        if (have >= needQty) return
+        if (!force && have >= needQty) return
 
         if (isCropItem(itemId)) {
           const crop = CROPS[itemId]
@@ -979,6 +980,46 @@ export const useGame = create<GameState>()(
         }
 
         set({ toast: `Find ${meta.name} through Missions and machines` })
+      },
+
+      navigateToMissionGoal: (goal) => {
+        const s = get()
+        switch (goal.kind) {
+          case 'harvest':
+          case 'craft':
+          case 'collect_animal':
+            if (goal.target) {
+              get().navigateToItem(goal.target as ItemId, goal.amount, true)
+            }
+            return
+          case 'buy_animal': {
+            const animal = ANIMALS[goal.target as AnimalTypeId]
+            if (!animal) return
+            if (!s.unlocked.includes(animal.buildingId)) {
+              set({
+                toast: `Unlock ${ANIMAL_BUILDINGS[animal.buildingId].name} via Missions`,
+              })
+              return
+            }
+            set({
+              tab: 'animals',
+              selectedAnimalBuilding: animal.buildingId,
+              shopScrollTarget: null,
+              toast: `Buy a ${animal.name} here`,
+            })
+            return
+          }
+          case 'fulfill_order':
+            if (s.isOrdersOpen()) {
+              set({ tab: 'orders', toast: 'Fulfill an order from your board' })
+            } else {
+              set({ toast: `Orders unlock at Level ${ORDERS_UNLOCK_LEVEL}` })
+            }
+            return
+          case 'own_coins':
+            set({ toast: 'Earn coins from harvests, crafts, and orders' })
+            return
+        }
       },
 
       clearShopScrollTarget: () => set({ shopScrollTarget: null }),

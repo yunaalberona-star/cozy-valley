@@ -15,7 +15,6 @@ import {
   queueUpgradeCost,
 } from './game/data/buildings'
 import { CROPS, SORTED_CROP_LIST, xpProgress } from './game/data/crops'
-import { collectMachineIngredients } from './game/data/itemSources'
 import {
   ADVENTURES,
   adventuresForLevel,
@@ -258,20 +257,37 @@ function GoalList({
   parentId: string
   progress: Record<string, number>
 }) {
+  const navigateToMissionGoal = useGame((s) => s.navigateToMissionGoal)
   const mission = MISSION_BY_ID[parentId]
   const event = EVENT_BY_ID[parentId]
   const goals = mission?.goals ?? event?.goals ?? []
   return (
-    <ul className="need-list">
+    <ul className="need-list mission-goals">
       {goals.map((g) => {
         const cur = missionGoalProgress(progress, parentId, g.id)
         const ok = cur >= g.amount
+        if (ok) {
+          return (
+            <li key={g.id} className="ok">
+              {g.label}{' '}
+              <span>
+                ({Math.min(cur, g.amount)}/{g.amount})
+              </span>
+            </li>
+          )
+        }
         return (
-          <li key={g.id} className={ok ? 'ok' : 'no'}>
-            {g.label}{' '}
-            <span>
-              ({Math.min(cur, g.amount)}/{g.amount})
-            </span>
+          <li key={g.id} className="no">
+            <button
+              type="button"
+              className="need-item-btn"
+              onClick={() => navigateToMissionGoal(g)}
+            >
+              {g.label}{' '}
+              <span>
+                ({Math.min(cur, g.amount)}/{g.amount})
+              </span>
+            </button>
           </li>
         )
       })}
@@ -527,10 +543,14 @@ function IngredientBar({
   items,
   inventory,
   onNeedItem,
+  label = 'Required items',
+  compact = false,
 }: {
   items: { id: ItemId; qty: number }[]
   inventory: Partial<Record<ItemId, number>>
   onNeedItem: (id: ItemId, qty: number) => void
+  label?: string | false
+  compact?: boolean
 }) {
   if (items.length === 0) return null
 
@@ -542,8 +562,8 @@ function IngredientBar({
   })
 
   return (
-    <div className="ingredient-bar">
-      <p className="ingredient-bar-label">Required items</p>
+    <div className={`ingredient-bar ${compact ? 'compact' : ''}`}>
+      {label !== false && <p className="ingredient-bar-label">{label}</p>}
       <div className="ingredient-chips" role="list">
         {sorted.map(({ id, qty }) => {
           const meta = ITEM_META[id]
@@ -572,39 +592,6 @@ function IngredientBar({
         })}
       </div>
     </div>
-  )
-}
-
-function NeedItem({
-  id,
-  qty,
-  have,
-  onNeed,
-}: {
-  id: ItemId
-  qty: number
-  have: number
-  onNeed: (id: ItemId, qty: number) => void
-}) {
-  const meta = ITEM_META[id]
-  const ok = have >= qty
-  if (ok) {
-    return (
-      <li className="ok">
-        {meta?.emoji} {qty} {meta?.name} <span>({have})</span>
-      </li>
-    )
-  }
-  return (
-    <li className="no">
-      <button
-        type="button"
-        className="need-item-btn"
-        onClick={() => onNeed(id, qty)}
-      >
-        {meta?.emoji} {qty} {meta?.name} <span>({have})</span>
-      </button>
-    </li>
   )
 }
 
@@ -640,11 +627,6 @@ function MachinesView() {
   const queue = craftQueue
     .map((job, index) => ({ job, index }))
     .filter(({ job }) => job.buildingId === open)
-  const machineIngredients = collectMachineIngredients(
-    recipes,
-    level,
-    isRecipeUnlocked,
-  )
 
   return (
     <div className="panel">
@@ -756,12 +738,6 @@ function MachinesView() {
             </button>
           )}
 
-          <IngredientBar
-            items={machineIngredients}
-            inventory={inventory}
-            onNeedItem={navigateToItem}
-          />
-
           {queue.length > 0 && (
             <div className="queue">
               {queue.map(({ job, index }) => {
@@ -830,28 +806,25 @@ function MachinesView() {
                       </p>
                     </div>
                   </div>
+                  <IngredientBar
+                    items={Object.entries(recipe.inputs).map(([id, qty]) => ({
+                      id: id as ItemId,
+                      qty: qty ?? 0,
+                    }))}
+                    inventory={inventory}
+                    onNeedItem={navigateToItem}
+                    label={false}
+                    compact
+                  />
                   {!recipeLocked && (
-                    <>
-                      <ul className="need-list">
-                        {Object.entries(recipe.inputs).map(([id, qty]) => (
-                          <NeedItem
-                            key={id}
-                            id={id as ItemId}
-                            qty={qty ?? 0}
-                            have={inventory[id as ItemId] ?? 0}
-                            onNeed={navigateToItem}
-                          />
-                        ))}
-                      </ul>
-                      <button
-                        type="button"
-                        className="btn full"
-                        disabled={missing || queueFull}
-                        onClick={() => startCraft(recipe.id)}
-                      >
-                        {queueFull ? 'Queue full' : 'Start'}
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      className="btn full"
+                      disabled={missing || queueFull}
+                      onClick={() => startCraft(recipe.id)}
+                    >
+                      {queueFull ? 'Queue full' : 'Start'}
+                    </button>
                   )}
                 </div>
               )

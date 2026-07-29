@@ -108,7 +108,7 @@ export const CROPS: Record<CropId, CropDef> = {
     emoji: '🎃',
     seedCost: 28,
     growMs: 80_000,
-    harvestQty: 1,
+    harvestQty: 2,
     xp: 22,
     unlockLevel: 4,
   },

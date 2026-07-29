@@ -37,21 +37,3 @@ export function machineBuildingForItem(
   }
   return null
 }
-
-export function collectMachineIngredients(
-  recipes: RecipeDef[],
-  playerLevel: number,
-  isRecipeUnlocked: (recipeId: string, level: number) => boolean,
-): { id: ItemId; qty: number }[] {
-  const map = new Map<ItemId, number>()
-  for (const recipe of recipes) {
-    if (!isRecipeUnlocked(recipe.id, playerLevel)) continue
-    for (const [id, qty] of Object.entries(recipe.inputs)) {
-      const itemId = id as ItemId
-      map.set(itemId, Math.max(map.get(itemId) ?? 0, qty ?? 0))
-    }
-  }
-  return [...map.entries()]
-    .map(([id, qty]) => ({ id, qty }))
-    .sort((a, b) => a.id.localeCompare(b.id))
-}

@@ -791,12 +791,32 @@ button {
   opacity: 0.85;
 }
 
+.mission-goals .need-item-btn {
+  width: 100%;
+}
+
+.mission-goals li.no {
+  cursor: pointer;
+}
+
 .ingredient-bar {
   margin-bottom: 14px;
   padding: 12px;
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(143, 191, 122, 0.35);
+}
+
+.ingredient-bar.compact {
+  margin-bottom: 10px;
+  padding: 8px 0 0;
+  background: none;
+  border: none;
+}
+
+html.theme-dark .ingredient-bar.compact {
+  background: none;
+  border: none;
 }
 
 .ingredient-bar-label {
