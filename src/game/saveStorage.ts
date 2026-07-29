@@ -42,7 +42,10 @@ export function mergePersistedSlice(
   return {
     ...defaults,
     ...p,
-    seeds: { ...(defaults.seeds as object), ...((p.seeds as object) ?? {}) },
+    seeds:
+      p.seeds != null && typeof p.seeds === 'object'
+        ? { ...(p.seeds as object) }
+        : { ...((defaults.seeds as object) ?? {}) },
     inventory: { ...((p.inventory as object) ?? {}) },
     materials: { ...((p.materials as object) ?? {}) },
     machineQueueBonus: { ...((p.machineQueueBonus as object) ?? {}) },
