@@ -126,6 +126,10 @@ export const CROPS: Record<CropId, CropDef> = {
 
 export const CROP_LIST = Object.values(CROPS)
 
+export const SORTED_CROP_LIST = [...CROP_LIST].sort(
+  (a, b) => a.unlockLevel - b.unlockLevel || a.name.localeCompare(b.name),
+)
+
 export function xpForLevel(level: number): number {
   return Math.floor(40 * level ** 1.45)
 }

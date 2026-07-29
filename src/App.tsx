@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react'
 import { ANIMALS } from './game/data/animals'
+import { ANIMAL_BUILDINGS } from './game/data/animalBuildings'
 import {
-  ANIMAL_BUILDING_LIST,
-  ANIMAL_BUILDINGS,
-} from './game/data/animalBuildings'
+  allRecipesForBuilding,
+  isRecipeUnlocked,
+  sortedAnimalBuildings,
+  sortedMachineBuildings,
+} from './game/data/unlockOrder'
 import {
-  BUILDING_LIST,
   BUILDINGS,
   ITEM_META,
   MAX_QUEUE_BONUS,
   ORDERS_UNLOCK_LEVEL,
   queueUpgradeCost,
-  recipesForBuilding,
 } from './game/data/buildings'
-import { CROPS, CROP_LIST, xpProgress } from './game/data/crops'
+import { CROPS, SORTED_CROP_LIST, xpProgress } from './game/data/crops'
 import {
   ADVENTURES,
   adventuresForLevel,
@@ -387,7 +388,7 @@ function FarmView() {
   const unlockPlot = useGame((s) => s.unlockPlot)
   const isCropAvailable = useGame((s) => s.isCropAvailable)
   const unlockCost = plotUnlockCost(plots.length)
-  const available = CROP_LIST.filter((c) => isCropAvailable(c.id))
+  const available = SORTED_CROP_LIST.filter((c) => isCropAvailable(c.id))
 
   return (
     <div className="panel farm-panel">
@@ -484,6 +485,8 @@ function FarmView() {
 
 function MachinesView() {
   const now = useNow()
+  const xp = useGame((s) => s.xp)
+  const { level } = xpProgress(xp)
   const coins = useGame((s) => s.coins)
   const unlocked = useGame((s) => s.unlocked)
   const ownedBuildings = useGame((s) => s.ownedBuildings)
@@ -505,7 +508,7 @@ function MachinesView() {
       : null
   const building = open ? BUILDINGS[open] : null
   const owned = open ? ownedBuildings.includes(open) : false
-  const recipes = open && owned ? recipesForBuilding(open) : []
+  const recipes = open && owned ? allRecipesForBuilding(open) : []
   const queueCap = open ? machineQueueCapacity(open) : 0
   const queueBonus = open ? (machineQueueBonus[open] ?? 0) : 0
   const queue = craftQueue
@@ -521,7 +524,7 @@ function MachinesView() {
 
       {!open && (
         <div className="machine-grid">
-          {BUILDING_LIST.map((b) => {
+          {sortedMachineBuildings().map((b) => {
             const blueprintLocked = !unlocked.includes(b.id)
             const isOwned = ownedBuildings.includes(b.id)
             const canBuy = !blueprintLocked && !isOwned
@@ -625,7 +628,7 @@ function MachinesView() {
           {queue.length > 0 && (
             <div className="queue">
               {queue.map(({ job, index }) => {
-                const recipe = recipesForBuilding(open).find(
+                const recipe = allRecipesForBuilding(open).find(
                   (r) => r.id === job.recipeId,
                 ) ?? ITEM_META[job.recipeId as ItemId]
                 const done = now >= job.doneAt
@@ -669,42 +672,52 @@ function MachinesView() {
 
           <div className="card-list">
             {recipes.map((recipe) => {
+              const recipeLocked = !isRecipeUnlocked(recipe.id, level)
               const missing = Object.entries(recipe.inputs).some(
                 ([id, qty]) => (inventory[id as ItemId] ?? 0) < (qty ?? 0),
               )
               const queueFull = queue.length >= queueCap
               return (
-                <div key={recipe.id} className="recipe-card">
+                <div
+                  key={recipe.id}
+                  className={`recipe-card ${recipeLocked ? 'locked' : ''}`}
+                >
                   <div className="recipe-top">
                     <span className="big-emoji">{recipe.emoji}</span>
                     <div>
                       <strong>{recipe.name}</strong>
                       <p className="muted">
-                        {formatLeft(recipe.craftMs)} · +{recipe.xp} XP
+                        {recipeLocked
+                          ? `🔒 Level ${recipe.unlockLevel}`
+                          : `${formatLeft(recipe.craftMs)} · +${recipe.xp} XP`}
                       </p>
                     </div>
                   </div>
-                  <ul className="need-list">
-                    {Object.entries(recipe.inputs).map(([id, qty]) => {
-                      const meta = ITEM_META[id as ItemId]
-                      const have = inventory[id as ItemId] ?? 0
-                      const ok = have >= (qty ?? 0)
-                      return (
-                        <li key={id} className={ok ? 'ok' : 'no'}>
-                          {meta?.emoji} {qty} {meta?.name}{' '}
-                          <span>({have})</span>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                  <button
-                    type="button"
-                    className="btn full"
-                    disabled={missing || queueFull}
-                    onClick={() => startCraft(recipe.id)}
-                  >
-                    {queueFull ? 'Queue full' : 'Start'}
-                  </button>
+                  {!recipeLocked && (
+                    <>
+                      <ul className="need-list">
+                        {Object.entries(recipe.inputs).map(([id, qty]) => {
+                          const meta = ITEM_META[id as ItemId]
+                          const have = inventory[id as ItemId] ?? 0
+                          const ok = have >= (qty ?? 0)
+                          return (
+                            <li key={id} className={ok ? 'ok' : 'no'}>
+                              {meta?.emoji} {qty} {meta?.name}{' '}
+                              <span>({have})</span>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                      <button
+                        type="button"
+                        className="btn full"
+                        disabled={missing || queueFull}
+                        onClick={() => startCraft(recipe.id)}
+                      >
+                        {queueFull ? 'Queue full' : 'Start'}
+                      </button>
+                    </>
+                  )}
                 </div>
               )
             })}
@@ -749,7 +762,7 @@ function AnimalsView() {
 
       {!open && (
         <div className="machine-grid">
-          {ANIMAL_BUILDING_LIST.map((b) => {
+          {sortedAnimalBuildings().map((b) => {
             const locked = !unlocked.includes(b.id)
             const animalDef = ANIMALS[b.animalTypeId]
             const count = animals.filter((a) => a.typeId === b.animalTypeId).length
@@ -1180,7 +1193,7 @@ function ShopView() {
         <p>New crops unlock as you progress through missions.</p>
       </div>
       <div className="card-list">
-        {CROP_LIST.map((crop) => {
+        {SORTED_CROP_LIST.map((crop) => {
           const locked = !isCropAvailable(crop.id)
           return (
             <div

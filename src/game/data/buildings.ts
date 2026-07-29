@@ -563,7 +563,3 @@ export const ITEM_META: Record<ItemId, { name: string; emoji: string }> = {
   cake: { name: 'Celebration Cake', emoji: '🎂' },
   rope: { name: 'Sun Rope', emoji: '🪢' },
 }
-
-export function recipesForBuilding(buildingId: BuildingId): RecipeDef[] {
-  return RECIPES.filter((r) => r.buildingId === buildingId)
-}

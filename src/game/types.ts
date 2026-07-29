@@ -172,6 +172,8 @@ export interface RecipeDef {
   inputs: Partial<Record<ItemId, number>>
   craftMs: number
   xp: number
+  /** Player level required; computed from ingredient unlock levels. */
+  unlockLevel?: number
 }
 
 export interface BuildingDef {

@@ -5,6 +5,7 @@ import { ANIMAL_BUILDINGS } from './data/animalBuildings'
 import { ADVENTURE_BY_ID, TAVERN_UNLOCK_LEVEL } from './data/adventures'
 import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
 import { CROPS, levelFromXp } from './data/crops'
+import { recipeUnlockLevel } from './data/unlockOrder'
 import {
   GEAR_BLUEPRINT_BY_ID,
   GEAR_BUILDINGS,
@@ -901,6 +902,11 @@ export const useGame = create<GameState>()(
         }
         if (!s.ownedBuildings.includes(recipe.buildingId)) {
           set({ toast: 'Purchase this machine first' })
+          return
+        }
+        const needLevel = recipeUnlockLevel(recipeId)
+        if (levelFromXp(s.xp) < needLevel) {
+          set({ toast: `Reach Level ${needLevel} to craft this` })
           return
         }
         const building = BUILDINGS[recipe.buildingId]

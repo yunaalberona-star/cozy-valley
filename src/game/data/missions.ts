@@ -28,7 +28,7 @@ export const MISSIONS: MissionDef[] = [
     rewardCoins: 50,
     rewardXp: 25,
     rewardItems: { wheat: 6 },
-    unlocks: ['chicken_coop', 'feed_mill'],
+    unlocks: ['feed_mill', 'chicken_coop'],
     requires: 'm1_first_sprouts',
   },
   {
