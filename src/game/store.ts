@@ -4,7 +4,7 @@ import { ANIMALS } from './data/animals'
 import { ANIMAL_BUILDINGS } from './data/animalBuildings'
 import { ADVENTURE_BY_ID, TAVERN_UNLOCK_LEVEL } from './data/adventures'
 import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
-import { CROPS, levelFromXp } from './data/crops'
+import { CROPS, CROP_LIST, levelFromXp } from './data/crops'
 import { recipeUnlockLevel } from './data/unlockOrder'
 import {
   GEAR_BLUEPRINT_BY_ID,
@@ -45,6 +45,7 @@ import type {
   GearInstance,
   ItemId,
   MaterialId,
+  MissionDef,
   MissionGoal,
   PlotState,
   PopupState,
@@ -398,6 +399,134 @@ function goalKey(missionOrEventId: string, goalId: string): string {
   return `${missionOrEventId}:${goalId}`
 }
 
+function isMissionComplete(
+  missionId: string,
+  progress: Record<string, number>,
+): boolean {
+  const mission = MISSION_BY_ID[missionId]
+  if (!mission) return false
+  return mission.goals.every(
+    (g) => (progress[goalKey(missionId, g.id)] ?? 0) >= g.amount,
+  )
+}
+
+function missionClaimPopup(mission: MissionDef): PopupState {
+  const unlockItems = mission.unlocks.map((u) => {
+    const meta = unlockMeta(u)
+    return { emoji: meta.emoji, name: meta.name }
+  })
+  return {
+    kind: 'mission_claim',
+    missionId: mission.id,
+    title: 'Mission complete!',
+    subtitle: `${mission.emoji} ${mission.name} — all goals ready`,
+    items: [
+      { emoji: '🪙', name: `${mission.rewardCoins} coins` },
+      { emoji: '⭐', name: `${mission.rewardXp} XP` },
+      ...unlockItems,
+    ],
+  }
+}
+
+function queueMissionClaimIfReady(
+  activeMissionId: string | null,
+  beforeProgress: Record<string, number>,
+  afterProgress: Record<string, number>,
+  popupQueue: PopupState[],
+): PopupState[] {
+  if (!activeMissionId) return popupQueue
+  const mission = MISSION_BY_ID[activeMissionId]
+  if (!mission) return popupQueue
+  if (isMissionComplete(activeMissionId, beforeProgress)) return popupQueue
+  if (!isMissionComplete(activeMissionId, afterProgress)) return popupQueue
+  if (popupQueue.some((p) => p.kind === 'mission_claim')) return popupQueue
+  const filtered = popupQueue.filter((p) => p.kind !== 'mission_claim')
+  return [missionClaimPopup(mission), ...filtered]
+}
+
+type MissionProgressSlice = Pick<
+  GameState,
+  'activeMissionId' | 'missionProgress' | 'popupQueue' | 'inventory' | 'coins' | 'animals'
+>
+
+function computeMissionProgressFromState(
+  s: Pick<GameState, 'inventory' | 'coins' | 'animals' | 'missionProgress'>,
+  missionId: string,
+): Record<string, number> {
+  const mission = MISSION_BY_ID[missionId]
+  if (!mission) return s.missionProgress
+  const next = { ...s.missionProgress }
+  for (const g of mission.goals) {
+    const key = goalKey(missionId, g.id)
+    switch (g.kind) {
+      case 'harvest':
+      case 'craft':
+      case 'collect_animal':
+        if (g.target) {
+          next[key] = Math.min(g.amount, s.inventory[g.target as ItemId] ?? 0)
+        }
+        break
+      case 'buy_animal':
+        if (g.target) {
+          next[key] = Math.min(
+            g.amount,
+            s.animals.filter((a) => a.typeId === g.target).length,
+          )
+        }
+        break
+      case 'own_coins':
+        next[key] = Math.min(g.amount, s.coins)
+        break
+      case 'fulfill_order':
+        next[key] = Math.min(g.amount, next[key] ?? 0)
+        break
+    }
+  }
+  return next
+}
+
+function resolveMissionProgress(
+  s: MissionProgressSlice,
+  bumpedProgress?: Record<string, number>,
+): Pick<GameState, 'missionProgress' | 'popupQueue'> {
+  if (!s.activeMissionId) {
+    return {
+      missionProgress: bumpedProgress ?? s.missionProgress,
+      popupQueue: s.popupQueue,
+    }
+  }
+  const missionProgress = computeMissionProgressFromState(
+    { ...s, missionProgress: bumpedProgress ?? s.missionProgress },
+    s.activeMissionId,
+  )
+  const wasComplete = isMissionComplete(s.activeMissionId, s.missionProgress)
+  const nowComplete = isMissionComplete(s.activeMissionId, missionProgress)
+  let popupQueue = s.popupQueue
+  if (wasComplete && !nowComplete) {
+    popupQueue = popupQueue.filter((p) => p.kind !== 'mission_claim')
+  } else if (!wasComplete && nowComplete) {
+    popupQueue = queueMissionClaimIfReady(
+      s.activeMissionId,
+      s.missionProgress,
+      missionProgress,
+      popupQueue,
+    )
+  }
+  return { missionProgress, popupQueue }
+}
+
+function withMissionProgress<T extends MissionProgressSlice>(
+  s: T,
+  patch: Partial<T>,
+  bumpedProgress?: Record<string, number>,
+): T & Pick<GameState, 'missionProgress' | 'popupQueue'> {
+  const merged = { ...s, ...patch }
+  return {
+    ...merged,
+    ...resolveMissionProgress(merged, bumpedProgress),
+  }
+}
+
 function emptyProgress(goals: MissionGoal[], id: string): Record<string, number> {
   const out: Record<string, number> = {}
   for (const g of goals) out[goalKey(id, g.id)] = 0
@@ -500,6 +629,42 @@ function cropAvailable(cropId: CropId, unlocked: UnlockId[]): boolean {
       return u.has('kitchen') || u.has('loom')
     default:
       return true
+  }
+}
+
+const SEED_UNLOCK_GRANT = 3
+
+function newlyUnlockedCrops(
+  before: UnlockId[],
+  after: UnlockId[],
+): CropId[] {
+  return CROP_LIST.filter(
+    (crop) => !cropAvailable(crop.id, before) && cropAvailable(crop.id, after),
+  ).map((crop) => crop.id)
+}
+
+function grantSeedsForNewCrops(
+  seeds: Partial<Record<CropId, number>>,
+  before: UnlockId[],
+  after: UnlockId[],
+): Partial<Record<CropId, number>> {
+  const added = newlyUnlockedCrops(before, after)
+  if (added.length === 0) return seeds
+  const next = { ...seeds }
+  for (const cropId of added) {
+    next[cropId] = (next[cropId] ?? 0) + SEED_UNLOCK_GRANT
+  }
+  return next
+}
+
+function patchUnlockTransition(
+  seeds: Partial<Record<CropId, number>>,
+  before: UnlockId[],
+  after: UnlockId[],
+): { seeds: Partial<Record<CropId, number>>; unlocked: UnlockId[] } {
+  return {
+    unlocked: after,
+    seeds: grantSeedsForNewCrops(seeds, before, after),
   }
 }
 
@@ -746,15 +911,14 @@ export const useGame = create<GameState>()(
 
         if (s.activeMissionId) {
           const mission = MISSION_BY_ID[s.activeMissionId]
-          if (mission) {
-            const value = kind === 'own_coins' ? s.coins : amount
+          if (mission && kind === 'fulfill_order') {
             missionProgress = bumpGoals(
               missionProgress,
               mission.goals,
               s.activeMissionId,
               kind,
               target,
-              value,
+              amount,
             )
           }
         }
@@ -774,11 +938,21 @@ export const useGame = create<GameState>()(
           }
         }
 
+        const missionPatch = resolveMissionProgress(
+          { ...s, missionProgress },
+          kind === 'fulfill_order' ? missionProgress : undefined,
+        )
+
         if (
-          missionProgress !== s.missionProgress ||
-          eventProgress !== s.eventProgress
+          missionPatch.missionProgress !== s.missionProgress ||
+          eventProgress !== s.eventProgress ||
+          missionPatch.popupQueue !== s.popupQueue
         ) {
-          set({ missionProgress, eventProgress })
+          set({
+            missionProgress: missionPatch.missionProgress,
+            eventProgress,
+            popupQueue: missionPatch.popupQueue,
+          })
         }
       },
 
@@ -859,12 +1033,17 @@ export const useGame = create<GameState>()(
           s.activeOrders,
         )
         const guides = unlockGuidePatch(s, xpResult.unlocked)
+        const unlockPatch = patchUnlockTransition(
+          s.seeds,
+          s.unlocked,
+          xpResult.unlocked,
+        )
         set({
           plots,
           inventory: addItem(s.inventory, cropId, crop.harvestQty),
           xp: xpResult.xp,
           popupQueue: xpResult.popupQueue,
-          unlocked: xpResult.unlocked,
+          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -921,19 +1100,21 @@ export const useGame = create<GameState>()(
           return
         }
         const now = Date.now()
-        set({
-          inventory: takeItems(s.inventory, recipe.inputs),
-          craftQueue: [
-            ...s.craftQueue,
-            {
-              recipeId,
-              buildingId: recipe.buildingId,
-              startedAt: now,
-              doneAt: now + recipe.craftMs,
-            },
-          ],
-          toast: `${building.name}: ${recipe.name}…`,
-        })
+        set((s) =>
+          withMissionProgress(s, {
+            inventory: takeItems(s.inventory, recipe.inputs),
+            craftQueue: [
+              ...s.craftQueue,
+              {
+                recipeId,
+                buildingId: recipe.buildingId,
+                startedAt: now,
+                doneAt: now + recipe.craftMs,
+              },
+            ],
+            toast: `${building.name}: ${recipe.name}…`,
+          }),
+        )
       },
 
       collectCraft: (index) => {
@@ -951,12 +1132,17 @@ export const useGame = create<GameState>()(
           s.activeOrders,
         )
         const guides = unlockGuidePatch(s, xpResult.unlocked)
+        const unlockPatch = patchUnlockTransition(
+          s.seeds,
+          s.unlocked,
+          xpResult.unlocked,
+        )
         set({
           craftQueue,
           inventory: addItem(s.inventory, recipe.output, recipe.outputQty),
           xp: xpResult.xp,
           popupQueue: xpResult.popupQueue,
-          unlocked: xpResult.unlocked,
+          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1067,13 +1253,15 @@ export const useGame = create<GameState>()(
           set({ toast: `Need ${qty}× ${ITEM_META[def.feedItem].name}` })
           return
         }
-        set({
-          inventory: takeItems(s.inventory, { [def.feedItem]: qty }),
-          animals: s.animals.map((a) =>
-            a.id === animalId ? { ...a, startedAt: Date.now() } : a,
-          ),
-          toast: `Fed ${def.name}`,
-        })
+        set((s) =>
+          withMissionProgress(s, {
+            inventory: takeItems(s.inventory, { [def.feedItem!]: qty }),
+            animals: s.animals.map((a) =>
+              a.id === animalId ? { ...a, startedAt: Date.now() } : a,
+            ),
+            toast: `Fed ${def.name}`,
+          }),
+        )
       },
 
       collectAnimal: (animalId) => {
@@ -1095,11 +1283,16 @@ export const useGame = create<GameState>()(
           s.activeOrders,
         )
         const guides = unlockGuidePatch(s, xpResult.unlocked)
+        const unlockPatch = patchUnlockTransition(
+          s.seeds,
+          s.unlocked,
+          xpResult.unlocked,
+        )
         set({
           inventory: addItem(s.inventory, def.product, def.productQty),
           xp: xpResult.xp,
           popupQueue: xpResult.popupQueue,
-          unlocked: xpResult.unlocked,
+          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1145,12 +1338,17 @@ export const useGame = create<GameState>()(
             : o,
         )
         const guides = unlockGuidePatch(s, xpResult.unlocked)
+        const unlockPatch = patchUnlockTransition(
+          s.seeds,
+          s.unlocked,
+          xpResult.unlocked,
+        )
         set({
           inventory: takeItems(s.inventory, order.needs),
           coins: s.coins + order.rewardCoins,
           xp: xpResult.xp,
           popupQueue: xpResult.popupQueue,
-          unlocked: xpResult.unlocked,
+          ...unlockPatch,
           activeOrders: activeOrdersAfter,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1182,11 +1380,13 @@ export const useGame = create<GameState>()(
         }
         const unit = itemSellPrice(id)
         const total = unit * amount
-        set({
-          inventory: takeItems(s.inventory, { [id]: amount }),
-          coins: s.coins + total,
-          toast: `Sold ${amount}× ${ITEM_META[id].name} · 🪙 ${total}`,
-        })
+        set((s) =>
+          withMissionProgress(s, {
+            inventory: takeItems(s.inventory, { [id]: amount }),
+            coins: s.coins + total,
+            toast: `Sold ${amount}× ${ITEM_META[id].name} · 🪙 ${total}`,
+          }),
+        )
         get().track('own_coins', undefined, get().coins)
       },
 
@@ -1262,11 +1462,16 @@ export const useGame = create<GameState>()(
           (u) => u in BUILDINGS,
         ) as BuildingId | undefined
         const guides = unlockGuidePatch(s, xpResult.unlocked)
+        const unlockPatch = patchUnlockTransition(
+          s.seeds,
+          s.unlocked,
+          xpResult.unlocked,
+        )
         set({
           coins: s.coins + mission.rewardCoins,
           xp: xpResult.xp,
           inventory: addItems(s.inventory, mission.rewardItems),
-          unlocked: xpResult.unlocked,
+          ...unlockPatch,
           completedMissions,
           activeMissionId: next?.id ?? null,
           missionProgress: next ? emptyProgress(next.goals, next.id) : {},
@@ -1336,11 +1541,16 @@ export const useGame = create<GameState>()(
           s.activeOrders,
         )
         const guides = unlockGuidePatch(s, xpResult.unlocked)
+        const unlockPatch = patchUnlockTransition(
+          s.seeds,
+          s.unlocked,
+          xpResult.unlocked,
+        )
         set({
           coins: s.coins + event.rewardCoins,
           xp: xpResult.xp,
           inventory: addItems(s.inventory, event.rewardItems),
-          unlocked: xpResult.unlocked,
+          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1452,12 +1662,17 @@ export const useGame = create<GameState>()(
           s.activeOrders,
         )
         const guides = unlockGuidePatch(s, xpResult.unlocked)
+        const unlockPatch = patchUnlockTransition(
+          s.seeds,
+          s.unlocked,
+          xpResult.unlocked,
+        )
         set({
           activeAdventures: s.activeAdventures.filter((a) => a.id !== jobId),
           coins: s.coins + adventure.rewardCoins,
           xp: xpResult.xp,
           popupQueue: xpResult.popupQueue,
-          unlocked: xpResult.unlocked,
+          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1494,20 +1709,22 @@ export const useGame = create<GameState>()(
         }
         const taken = takeResources(s.inventory, s.materials, blueprint.inputs)
         const now = Date.now()
-        set({
-          inventory: taken.inventory,
-          materials: taken.materials,
-          gearCraftQueue: [
-            ...s.gearCraftQueue,
-            {
-              blueprintId,
-              buildingId: blueprint.buildingId,
-              startedAt: now,
-              doneAt: now + blueprint.craftMs,
-            },
-          ],
-          toast: `${building.name}: ${blueprint.name}…`,
-        })
+        set((s) =>
+          withMissionProgress(s, {
+            inventory: taken.inventory,
+            materials: taken.materials,
+            gearCraftQueue: [
+              ...s.gearCraftQueue,
+              {
+                blueprintId,
+                buildingId: blueprint.buildingId,
+                startedAt: now,
+                doneAt: now + blueprint.craftMs,
+              },
+            ],
+            toast: `${building.name}: ${blueprint.name}…`,
+          }),
+        )
       },
 
       collectGearCraft: (index) => {
@@ -1529,12 +1746,17 @@ export const useGame = create<GameState>()(
           s.activeOrders,
         )
         const guides = unlockGuidePatch(s, xpResult.unlocked)
+        const unlockPatch = patchUnlockTransition(
+          s.seeds,
+          s.unlocked,
+          xpResult.unlocked,
+        )
         set({
           gearCraftQueue: s.gearCraftQueue.filter((_, i) => i !== index),
           gearInventory: [...s.gearInventory, gear],
           xp: xpResult.xp,
           popupQueue: xpResult.popupQueue,
-          unlocked: xpResult.unlocked,
+          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1605,6 +1827,26 @@ export const useGame = create<GameState>()(
         ...current,
         ...mergePersistedSlice(persisted, persistedDefaults()),
       }),
+      onRehydrateStorage: () => (state, error) => {
+        if (error || !state?.activeMissionId) return
+        const mission = MISSION_BY_ID[state.activeMissionId]
+        if (!mission) return
+        state.missionProgress = computeMissionProgressFromState(
+          state,
+          state.activeMissionId,
+        )
+        if (!isMissionComplete(state.activeMissionId, state.missionProgress)) {
+          state.popupQueue = (state.popupQueue ?? []).filter(
+            (p) => p.kind !== 'mission_claim',
+          )
+          return
+        }
+        if (state.popupQueue.some((p) => p.kind === 'mission_claim')) return
+        state.popupQueue = [
+          missionClaimPopup(mission),
+          ...(state.popupQueue ?? []).filter((p) => p.kind !== 'mission_claim'),
+        ]
+      },
       partialize: (s) => ({
         coins: s.coins,
         xp: s.xp,

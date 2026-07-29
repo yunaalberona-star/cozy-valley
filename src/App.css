@@ -102,6 +102,16 @@ html.theme-dark .popup-card.kind-level_up {
   border-color: rgba(232, 184, 74, 0.45);
 }
 
+html.theme-dark .popup-card.kind-mission_claim {
+  background: linear-gradient(165deg, #1a2e22 0%, #152018 100%);
+  border-color: rgba(143, 191, 122, 0.55);
+}
+
+html.theme-dark .popup-card.kind-sell_confirm {
+  background: linear-gradient(165deg, #2a2418 0%, #1f1a12 100%);
+  border-color: rgba(199, 146, 42, 0.45);
+}
+
 html.theme-dark .popup-items li {
   background: rgba(0, 0, 0, 0.28);
   color: #e8efe4;
@@ -1064,6 +1074,16 @@ html.theme-dark .toast {
   background: linear-gradient(165deg, #fff9eb 0%, #f4fadc 100%);
 }
 
+.popup-card.kind-mission_claim {
+  border-color: rgba(74, 143, 96, 0.65);
+  background: linear-gradient(165deg, #f0fff4 0%, #e8f4dc 100%);
+}
+
+.popup-card.kind-sell_confirm {
+  border-color: rgba(199, 146, 42, 0.55);
+  background: linear-gradient(165deg, #fffaf2 0%, #f4f0e8 100%);
+}
+
 .popup-sparkle {
   font-size: 2rem;
   margin-bottom: 4px;
@@ -1111,6 +1131,24 @@ html.theme-dark .toast {
 
 .popup-btn {
   margin-top: 4px;
+}
+
+.popup-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.popup-btn-secondary {
+  margin-top: 0;
+}
+
+.popup-hint {
+  margin: -6px 0 12px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  font-weight: 600;
 }
 
 @keyframes fade-in {

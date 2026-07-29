@@ -163,23 +163,41 @@ function Toast() {
 function CelebrationPopup() {
   const popup = useGame((s) => s.popupQueue[0])
   const dismissPopup = useGame((s) => s.dismissPopup)
+  const claimMission = useGame((s) => s.claimMission)
+
+  const handleClaim = () => {
+    claimMission()
+  }
+
+  const handleDismiss = () => {
+    dismissPopup()
+  }
 
   useEffect(() => {
     if (!popup) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' || e.key === 'Enter') dismissPopup()
+      if (e.key === 'Escape') handleDismiss()
+      if (e.key === 'Enter' && popup.kind === 'mission_claim') handleClaim()
+      if (e.key === 'Enter' && popup.kind !== 'mission_claim') handleDismiss()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [popup, dismissPopup])
+  }, [popup, dismissPopup, claimMission])
 
   if (!popup) return null
+
+  const primaryLabel =
+    popup.kind === 'level_up'
+      ? 'Nice!'
+      : popup.kind === 'mission_claim'
+        ? 'Claim rewards'
+        : 'Got it!'
 
   return (
     <div
       className="popup-backdrop"
       role="presentation"
-      onClick={dismissPopup}
+      onClick={handleDismiss}
     >
       <div
         className={`popup-card kind-${popup.kind}`}
@@ -189,12 +207,18 @@ function CelebrationPopup() {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="popup-sparkle" aria-hidden>
-          ✨
+          {popup.kind === 'mission_claim' ? '📜' : '✨'}
         </div>
         <h2 id="popup-title" className="popup-title">
           {popup.title}
         </h2>
         {popup.subtitle && <p className="popup-sub">{popup.subtitle}</p>}
+        {popup.kind === 'mission_claim' && (
+          <p className="popup-hint muted">
+            Tap Later to keep playing — selling or using mission items lowers
+            progress until everything is ready at once.
+          </p>
+        )}
         <ul className="popup-items">
           {popup.items.map((item) => (
             <li key={item.name}>
@@ -203,9 +227,24 @@ function CelebrationPopup() {
             </li>
           ))}
         </ul>
-        <button type="button" className="btn full popup-btn" onClick={dismissPopup}>
-          {popup.kind === 'level_up' ? 'Nice!' : 'Got it!'}
-        </button>
+        {popup.kind === 'mission_claim' ? (
+          <div className="popup-actions">
+            <button type="button" className="btn full popup-btn" onClick={handleClaim}>
+              {primaryLabel}
+            </button>
+            <button
+              type="button"
+              className="btn ghost full popup-btn-secondary"
+              onClick={handleDismiss}
+            >
+              Later
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="btn full popup-btn" onClick={handleDismiss}>
+            {primaryLabel}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -976,6 +1015,73 @@ function OrdersView() {
   )
 }
 
+function SellConfirmDialog({
+  pending,
+  onConfirm,
+  onCancel,
+}: {
+  pending: PendingSell | null
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  useEffect(() => {
+    if (!pending) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel()
+      if (e.key === 'Enter') onConfirm()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [pending, onConfirm, onCancel])
+
+  if (!pending) return null
+
+  const total = pending.unitPrice * pending.amount
+
+  return (
+    <div className="popup-backdrop" role="presentation" onClick={onCancel}>
+      <div
+        className="popup-card kind-sell_confirm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sell-confirm-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="popup-sparkle" aria-hidden>
+          {pending.emoji}
+        </div>
+        <h2 id="sell-confirm-title" className="popup-title">
+          Sell {pending.name}?
+        </h2>
+        <p className="popup-sub">
+          Sell {pending.amount}× for 🪙 {total} ({pending.unitPrice} each)
+        </p>
+        <div className="popup-actions">
+          <button type="button" className="btn full popup-btn" onClick={onConfirm}>
+            Sell · 🪙 {total}
+          </button>
+          <button
+            type="button"
+            className="btn ghost full popup-btn-secondary"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type PendingSell = {
+  kind: 'goods' | 'seeds' | 'material'
+  id: string
+  amount: number
+  emoji: string
+  name: string
+  unitPrice: number
+}
+
 function SellableCell({
   emoji,
   name,
@@ -1016,13 +1122,28 @@ function BagView() {
   const sellSeeds = useGame((s) => s.sellSeeds)
   const sellMaterial = useGame((s) => s.sellMaterial)
   const resetGame = useGame((s) => s.resetGame)
+  const [pendingSell, setPendingSell] = useState<PendingSell | null>(null)
   const items = Object.entries(inventory).filter(([, n]) => (n ?? 0) > 0)
   const matItems = Object.entries(materials).filter(([, n]) => (n ?? 0) > 0)
   const seedItems = Object.entries(seeds).filter(([, n]) => (n ?? 0) > 0)
   const looseGear = gearInventory.filter((g) => !g.equippedBy)
 
+  const confirmSell = () => {
+    if (!pendingSell) return
+    const { kind, id, amount } = pendingSell
+    if (kind === 'goods') sellGoods(id as ItemId, amount)
+    else if (kind === 'seeds') sellSeeds(id as CropId, amount)
+    else sellMaterial(id as MaterialId, amount)
+    setPendingSell(null)
+  }
+
   return (
     <div className="panel">
+      <SellConfirmDialog
+        pending={pendingSell}
+        onConfirm={confirmSell}
+        onCancel={() => setPendingSell(null)}
+      />
       <div className="panel-head">
         <h2>Bag</h2>
         <p>Sell harvests & goods for a fair profit. Orders still pay best.</p>
@@ -1041,7 +1162,16 @@ function BagView() {
               name={crop?.name ?? id}
               qty={count}
               unitPrice={seedSellPrice(id as CropId)}
-              onSell={(amount) => sellSeeds(id as CropId, amount)}
+              onSell={(amount) =>
+                setPendingSell({
+                  kind: 'seeds',
+                  id,
+                  amount,
+                  emoji: crop?.emoji ?? '🌱',
+                  name: crop?.name ?? id,
+                  unitPrice: seedSellPrice(id as CropId),
+                })
+              }
             />
           )
         })}
@@ -1060,7 +1190,16 @@ function BagView() {
               name={meta?.name ?? id}
               qty={count}
               unitPrice={itemSellPrice(id as ItemId)}
-              onSell={(amount) => sellGoods(id as ItemId, amount)}
+              onSell={(amount) =>
+                setPendingSell({
+                  kind: 'goods',
+                  id,
+                  amount,
+                  emoji: meta?.emoji ?? '📦',
+                  name: meta?.name ?? id,
+                  unitPrice: itemSellPrice(id as ItemId),
+                })
+              }
             />
           )
         })}
@@ -1081,7 +1220,16 @@ function BagView() {
               name={meta?.name ?? id}
               qty={count}
               unitPrice={materialSellPrice(id as MaterialId)}
-              onSell={(amount) => sellMaterial(id as MaterialId, amount)}
+              onSell={(amount) =>
+                setPendingSell({
+                  kind: 'material',
+                  id,
+                  amount,
+                  emoji: meta?.emoji ?? '✨',
+                  name: meta?.name ?? id,
+                  unitPrice: materialSellPrice(id as MaterialId),
+                })
+              }
             />
           )
         })}

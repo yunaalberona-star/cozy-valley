@@ -4,11 +4,11 @@ import { CROPS } from './crops'
 import type { CropId, ItemId, MaterialId } from '../types'
 
 /** Profit margin when selling crafted goods over ingredient sell value. */
-const CRAFT_PROFIT_MULT = 1.3
+const CRAFT_PROFIT_MULT = 1.45
 /** Profit margin when selling harvested crops over seed cost per unit. */
 const CROP_PROFIT_MULT = 1.4
 /** Profit margin when selling animal products over feed sell value. */
-const ANIMAL_PROFIT_MULT = 1.35
+const ANIMAL_PROFIT_MULT = 1.4
 
 const MATERIAL_SELL: Record<MaterialId, number> = {
   iron_ore: 18,
@@ -25,9 +25,13 @@ function buildItemSellPrices(): Record<ItemId, number> {
     prices[crop.id] = Math.max(2, Math.ceil(unitCost * CROP_PROFIT_MULT))
   }
 
+  // Recipes and animal products depend on each other — iterate until stable.
   let changed = true
-  while (changed) {
+  let passes = 0
+  while (changed && passes < 24) {
     changed = false
+    passes += 1
+
     for (const recipe of RECIPES) {
       const inputValue = Object.entries(recipe.inputs).reduce(
         (sum, [id, qty]) => sum + (prices[id as ItemId] ?? 0) * (qty ?? 0),
@@ -43,15 +47,17 @@ function buildItemSellPrices(): Record<ItemId, number> {
         changed = true
       }
     }
-  }
 
-  for (const animal of Object.values(ANIMALS)) {
-    if (!animal.feedItem || !animal.feedQty) continue
-    const feedUnit = prices[animal.feedItem] ?? 0
-    const feedCost = feedUnit * animal.feedQty
-    const minSell = Math.max(3, Math.ceil(feedCost * ANIMAL_PROFIT_MULT))
-    if ((prices[animal.product] ?? 0) < minSell) {
-      prices[animal.product] = minSell
+    for (const animal of Object.values(ANIMALS)) {
+      if (!animal.feedItem || !animal.feedQty) continue
+      const feedUnit = prices[animal.feedItem] ?? 0
+      if (feedUnit <= 0) continue
+      const feedCost = feedUnit * animal.feedQty
+      const minSell = Math.max(3, Math.ceil(feedCost * ANIMAL_PROFIT_MULT))
+      if ((prices[animal.product] ?? 0) < minSell) {
+        prices[animal.product] = minSell
+        changed = true
+      }
     }
   }
 

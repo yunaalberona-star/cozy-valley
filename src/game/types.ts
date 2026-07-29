@@ -136,7 +136,7 @@ export type MissionGoalKind =
   | 'fulfill_order'
   | 'own_coins'
 
-export type PopupKind = 'unlock' | 'level_up'
+export type PopupKind = 'unlock' | 'level_up' | 'mission_claim'
 
 export interface PopupItem {
   emoji: string
@@ -148,6 +148,8 @@ export interface PopupState {
   title: string
   subtitle?: string
   items: PopupItem[]
+  /** Set for mission_claim popups. */
+  missionId?: string
 }
 
 export interface CropDef {
