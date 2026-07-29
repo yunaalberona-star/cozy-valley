@@ -91,11 +91,11 @@ export const MISSIONS: MissionDef[] = [
     id: 'm7_sweet_jar',
     name: 'Sweet Jar',
     emoji: '🫙',
-    story: 'Refine sugarcane, then cook a jar of jam.',
+    story: 'Refine sugarcane, then cook a jar of berry jam.',
     goals: [
       { id: 'g1', kind: 'harvest', target: 'sugarcane', amount: 4, label: 'Harvest 4 Sugarcane' },
       { id: 'g2', kind: 'craft', target: 'sugar', amount: 2, label: 'Refine 2 Sugar' },
-      { id: 'g3', kind: 'craft', target: 'jam', amount: 1, label: 'Make 1 Jam' },
+      { id: 'g3', kind: 'craft', target: 'jam', amount: 1, label: 'Make 1 Berry Jam' },
     ],
     rewardCoins: 120,
     rewardXp: 50,

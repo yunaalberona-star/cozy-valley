@@ -1440,6 +1440,9 @@ export const useGame = create<GameState>()(
           set({ toast: 'Finish all mission goals first' })
           return
         }
+        const queueWithoutClaim = s.popupQueue.filter(
+          (p) => p.kind !== 'mission_claim',
+        )
         const unlocked = [...new Set([...s.unlocked, ...mission.unlocks])]
         const freshUnlocks = newUnlocks(s.unlocked, unlocked)
         const completedMissions = [...s.completedMissions, id]
@@ -1451,7 +1454,7 @@ export const useGame = create<GameState>()(
         const xpResult = applyXpGain(
           s.xp,
           mission.rewardXp,
-          s.popupQueue,
+          queueWithoutClaim,
           unlocked,
           s.activeOrders,
         )
