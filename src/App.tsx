@@ -1330,6 +1330,7 @@ function MarketView() {
   const [postQty, setPostQty] = useState(1)
   const [postPrice, setPostPrice] = useState(1)
   const [busy, setBusy] = useState(false)
+  const [marketPane, setMarketPane] = useState<'buy' | 'sell'>('buy')
 
   const playerId = getPlayerId()
   const postable = buildPostableItems(inventory, seeds, materials)
@@ -1440,147 +1441,176 @@ function MarketView() {
         </p>
       )}
 
-      <h3 className="section-label">Browse listings</h3>
-      <div className="card-list">
-        {browseListings.length === 0 && (
-          <p className="muted">No listings yet — be the first to post!</p>
-        )}
-        {browseListings.map((listing) => {
-          const meta = marketItemLabel(listing.item_kind, listing.item_id)
-          const total = listing.quantity * listing.price_per_unit
-          const canBuy = coins >= total
-          return (
-            <div key={listing.id} className="recipe-card">
-              <div className="recipe-top">
-                <span className="big-emoji">{meta.emoji}</span>
-                <div>
-                  <strong>
-                    {listing.quantity}× {meta.name}
-                  </strong>
-                  <p className="muted">
-                    🪙 {listing.price_per_unit}/ea · {total} total · by{' '}
-                    {listing.seller_name}
-                  </p>
+      <div className="pane-tabs" role="tablist" aria-label="Market">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={marketPane === 'buy'}
+          className={marketPane === 'buy' ? 'active' : ''}
+          onClick={() => setMarketPane('buy')}
+        >
+          🛒 Buy
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={marketPane === 'sell'}
+          className={marketPane === 'sell' ? 'active' : ''}
+          onClick={() => setMarketPane('sell')}
+        >
+          📤 Sell
+        </button>
+      </div>
+
+      {marketPane === 'buy' && (
+        <>
+          <h3 className="section-label">From other farmers</h3>
+          <div className="card-list">
+            {browseListings.length === 0 && (
+              <p className="muted">No listings yet — check back later.</p>
+            )}
+            {browseListings.map((listing) => {
+              const meta = marketItemLabel(listing.item_kind, listing.item_id)
+              const total = listing.quantity * listing.price_per_unit
+              const canBuy = coins >= total
+              return (
+                <div key={listing.id} className="recipe-card">
+                  <div className="recipe-top">
+                    <span className="big-emoji">{meta.emoji}</span>
+                    <div>
+                      <strong>
+                        {listing.quantity}× {meta.name}
+                      </strong>
+                      <p className="muted">
+                        🪙 {listing.price_per_unit}/ea · {total} total · by{' '}
+                        {listing.seller_name}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn full"
+                    disabled={!canBuy || busy}
+                    onClick={() => void handleBuy(listing.id)}
+                  >
+                    {canBuy ? `Buy · 🪙 ${total}` : `Need 🪙 ${total}`}
+                  </button>
                 </div>
-              </div>
+              )
+            })}
+          </div>
+
+          <MarketChatPanel />
+        </>
+      )}
+
+      {marketPane === 'sell' && (
+        <>
+          <h3 className="section-label">Post a listing</h3>
+          {postable.length === 0 ? (
+            <p className="muted">Nothing to sell — stock your bag first.</p>
+          ) : (
+            <div className="recipe-card market-post">
+              <label className="market-field">
+                Item
+                <select
+                  className="market-input"
+                  value={postIndex}
+                  onChange={(e) => setPostIndex(Number(e.target.value))}
+                >
+                  {postable.map((item, i) => (
+                    <option key={`${item.kind}-${item.id}`} value={i}>
+                      {item.emoji} {item.name} ({item.qty})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="market-field">
+                Quantity
+                <input
+                  className="market-input"
+                  type="number"
+                  min={1}
+                  max={selectedPost?.qty ?? 1}
+                  value={postQty}
+                  onChange={(e) =>
+                    setPostQty(
+                      Math.max(
+                        1,
+                        Math.min(
+                          selectedPost?.qty ?? 1,
+                          Number(e.target.value) || 1,
+                        ),
+                      ),
+                    )
+                  }
+                />
+              </label>
+              <label className="market-field">
+                Price per unit
+                {priceBounds && (
+                  <span className="muted">
+                    {' '}
+                    ({priceBounds.min}–{priceBounds.max})
+                  </span>
+                )}
+                <input
+                  className="market-input"
+                  type="number"
+                  min={priceBounds?.min ?? 1}
+                  max={priceBounds?.max ?? 9999}
+                  value={postPrice}
+                  onChange={(e) =>
+                    setPostPrice(Math.max(1, Number(e.target.value) || 1))
+                  }
+                />
+              </label>
               <button
                 type="button"
                 className="btn full"
-                disabled={!canBuy || busy}
-                onClick={() => void handleBuy(listing.id)}
+                disabled={busy || !selectedPost}
+                onClick={() => void handlePost()}
               >
-                {canBuy ? `Buy · 🪙 ${total}` : `Need 🪙 ${total}`}
+                Post listing
               </button>
             </div>
-          )
-        })}
-      </div>
+          )}
 
-      <h3 className="section-label">Post a listing</h3>
-      {postable.length === 0 ? (
-        <p className="muted">Nothing to sell — stock your bag first.</p>
-      ) : (
-        <div className="recipe-card market-post">
-          <label className="market-field">
-            Item
-            <select
-              className="market-input"
-              value={postIndex}
-              onChange={(e) => setPostIndex(Number(e.target.value))}
-            >
-              {postable.map((item, i) => (
-                <option key={`${item.kind}-${item.id}`} value={i}>
-                  {item.emoji} {item.name} ({item.qty})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="market-field">
-            Quantity
-            <input
-              className="market-input"
-              type="number"
-              min={1}
-              max={selectedPost?.qty ?? 1}
-              value={postQty}
-              onChange={(e) =>
-                setPostQty(
-                  Math.max(
-                    1,
-                    Math.min(
-                      selectedPost?.qty ?? 1,
-                      Number(e.target.value) || 1,
-                    ),
-                  ),
-                )
-              }
-            />
-          </label>
-          <label className="market-field">
-            Price per unit
-            {priceBounds && (
-              <span className="muted">
-                {' '}
-                ({priceBounds.min}–{priceBounds.max})
-              </span>
+          <h3 className="section-label">Your listings</h3>
+          <div className="card-list">
+            {myListings.length === 0 && (
+              <p className="muted">You have no active listings.</p>
             )}
-            <input
-              className="market-input"
-              type="number"
-              min={priceBounds?.min ?? 1}
-              max={priceBounds?.max ?? 9999}
-              value={postPrice}
-              onChange={(e) =>
-                setPostPrice(Math.max(1, Number(e.target.value) || 1))
-              }
-            />
-          </label>
-          <button
-            type="button"
-            className="btn full"
-            disabled={busy || !selectedPost}
-            onClick={() => void handlePost()}
-          >
-            Post listing
-          </button>
-        </div>
-      )}
-
-      <h3 className="section-label">My listings</h3>
-      <div className="card-list">
-        {myListings.length === 0 && (
-          <p className="muted">You have no active listings.</p>
-        )}
-        {myListings.map((listing) => {
-          const meta = marketItemLabel(listing.item_kind, listing.item_id)
-          const total = listing.quantity * listing.price_per_unit
-          return (
-            <div key={listing.id} className="recipe-card">
-              <div className="recipe-top">
-                <span className="big-emoji">{meta.emoji}</span>
-                <div>
-                  <strong>
-                    {listing.quantity}× {meta.name}
-                  </strong>
-                  <p className="muted">
-                    🪙 {listing.price_per_unit}/ea · {total} total
-                  </p>
+            {myListings.map((listing) => {
+              const meta = marketItemLabel(listing.item_kind, listing.item_id)
+              const total = listing.quantity * listing.price_per_unit
+              return (
+                <div key={listing.id} className="recipe-card">
+                  <div className="recipe-top">
+                    <span className="big-emoji">{meta.emoji}</span>
+                    <div>
+                      <strong>
+                        {listing.quantity}× {meta.name}
+                      </strong>
+                      <p className="muted">
+                        🪙 {listing.price_per_unit}/ea · {total} total
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn full secondary"
+                    disabled={busy}
+                    onClick={() => void handleCancel(listing.id)}
+                  >
+                    Cancel listing
+                  </button>
                 </div>
-              </div>
-              <button
-                type="button"
-                className="btn full secondary"
-                disabled={busy}
-                onClick={() => void handleCancel(listing.id)}
-              >
-                Cancel listing
-              </button>
-            </div>
-          )
-        })}
-      </div>
-
-      <MarketChatPanel />
+              )
+            })}
+          </div>
+        </>
+      )}
     </div>
   )
 }
