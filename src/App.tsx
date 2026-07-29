@@ -1062,7 +1062,6 @@ function OrdersView() {
   const inventory = useGame((s) => s.inventory)
   const activeOrders = useGame((s) => s.activeOrders)
   const fulfillOrder = useGame((s) => s.fulfillOrder)
-  const refreshOrders = useGame((s) => s.refreshOrders)
   const isOrdersOpen = useGame((s) => s.isOrdersOpen)
   const xp = useGame((s) => s.xp)
   const { level } = xpProgress(xp)
@@ -1084,14 +1083,9 @@ function OrdersView() {
 
   return (
     <div className="panel">
-      <div className="panel-head row">
-        <div>
-          <h2>Orders</h2>
-          <p>Ship goods for coins & XP.</p>
-        </div>
-        <button type="button" className="btn ghost" onClick={refreshOrders}>
-          Refresh
-        </button>
+      <div className="panel-head">
+        <h2>Orders</h2>
+        <p>Ship goods for coins & XP. Completed slots swap to a new order automatically.</p>
       </div>
 
       <div className="card-list">
@@ -1102,7 +1096,7 @@ function OrdersView() {
             ([id, qty]) => (inventory[id as ItemId] ?? 0) >= (qty ?? 0),
           )
           return (
-            <div key={active.slot} className="recipe-card">
+            <div key={`${active.slot}-${active.orderId}`} className="recipe-card">
               <div className="recipe-top">
                 <span className="big-emoji">{order.emoji}</span>
                 <div>

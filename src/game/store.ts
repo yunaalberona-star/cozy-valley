@@ -102,6 +102,14 @@ function pickOrders(level: number, exclude: string[] = []): ActiveOrder[] {
   }))
 }
 
+function pickReplacementOrderId(level: number, exclude: string[]): string | null {
+  const available = ORDERS.filter((o) => o.unlockLevel <= level)
+  const fresh = available.filter((o) => !exclude.includes(o.id))
+  const pool = fresh.length > 0 ? fresh : available
+  if (pool.length === 0) return null
+  return pool[Math.floor(Math.random() * pool.length)]!.id
+}
+
 function hasItems(
   inventory: Partial<Record<ItemId, number>>,
   needs: Partial<Record<ItemId, number>>,
@@ -826,7 +834,6 @@ export interface GameState {
   collectAnimal: (animalId: string) => void
 
   fulfillOrder: (slot: number) => void
-  refreshOrders: () => void
 
   createMarketListing: (
     itemKind: MarketItemKind,
@@ -1543,11 +1550,9 @@ export const useGame = create<GameState>()(
           set({ toast: 'Missing items for this order' })
           return
         }
-        const exclude = s.activeOrders
-          .filter((o) => o.slot !== slot)
-          .map((o) => o.orderId)
+        const exclude = s.activeOrders.map((o) => o.orderId)
         const level = levelFromXp(s.xp + order.rewardXp)
-        const replacement = pickOrders(level, [...exclude, order.id])[0]
+        const replacementId = pickReplacementOrderId(level, exclude)
         const xpResult = applyXpGain(
           s.xp,
           order.rewardXp,
@@ -1557,9 +1562,15 @@ export const useGame = create<GameState>()(
         )
         const activeOrdersAfter = xpResult.activeOrders.map((o) =>
           o.slot === slot
-            ? { orderId: replacement?.orderId ?? order.id, slot }
+            ? {
+                orderId: replacementId ?? o.orderId,
+                slot,
+              }
             : o,
         )
+        const replacement = replacementId
+          ? ORDERS.find((o) => o.id === replacementId)
+          : null
         const guides = unlockGuidePatch(s, xpResult.unlocked)
         const unlockPatch = patchUnlockTransition(
           s.seeds,
@@ -1575,22 +1586,12 @@ export const useGame = create<GameState>()(
           activeOrders: activeOrdersAfter,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          toast: `+${order.rewardCoins} coins · +${order.rewardXp} XP`,
+          toast: replacement
+            ? `+${order.rewardCoins} coins · New order: ${replacement.name}`
+            : `+${order.rewardCoins} coins · +${order.rewardXp} XP`,
         })
         get().track('fulfill_order', undefined, 1)
         get().track('own_coins', undefined, get().coins)
-      },
-
-      refreshOrders: () => {
-        if (!get().unlocked.includes('orders_board')) {
-          set({ toast: `Orders unlock at Level ${ORDERS_UNLOCK_LEVEL}` })
-          return
-        }
-        const level = levelFromXp(get().xp)
-        set({
-          activeOrders: pickOrders(level),
-          toast: 'Orders refreshed',
-        })
       },
 
       createMarketListing: async (itemKind, itemId, qty, pricePerUnit) => {
