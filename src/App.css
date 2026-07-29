@@ -752,6 +752,7 @@ button {
   border-radius: 12px;
   font-size: 0.52rem;
   font-weight: 800;
+  position: relative;
 }
 
 .tabnav button span {
@@ -843,6 +844,42 @@ button {
 .tabnav button.active {
   background: rgba(63, 122, 69, 0.14);
   color: var(--leaf-deep);
+}
+
+.guide-pulse-frame {
+  position: relative;
+}
+
+.guide-pulse-frame::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border: 2px solid #e8a020;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: guide-pulse-blink 1.15s ease-in-out infinite;
+  box-shadow: 0 0 10px rgba(232, 160, 32, 0.45);
+}
+
+.tabnav button.guide-pulse-frame::after {
+  border-radius: 12px;
+}
+
+.machine-card.guide-pulse-frame::after,
+.recipe-card.guide-pulse-frame::after {
+  border-radius: 14px;
+}
+
+@keyframes guide-pulse-blink {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.28;
+    transform: scale(0.98);
+  }
 }
 
 .toast {

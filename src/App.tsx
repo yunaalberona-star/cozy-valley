@@ -474,6 +474,7 @@ function MachinesView() {
   const unlocked = useGame((s) => s.unlocked)
   const ownedBuildings = useGame((s) => s.ownedBuildings)
   const machineQueueBonus = useGame((s) => s.machineQueueBonus)
+  const guideItemHighlights = useGame((s) => s.guideItemHighlights)
   const inventory = useGame((s) => s.inventory)
   const craftQueue = useGame((s) => s.craftQueue)
   const selectedBuilding = useGame((s) => s.selectedBuilding)
@@ -513,7 +514,7 @@ function MachinesView() {
             return (
               <div
                 key={b.id}
-                className={`machine-card ${blueprintLocked ? 'locked' : ''} ${canBuy ? 'for-sale' : ''}`}
+                className={`machine-card ${blueprintLocked ? 'locked' : ''} ${canBuy ? 'for-sale' : ''} ${!blueprintLocked && guideItemHighlights.includes(b.id) ? 'guide-pulse-frame' : ''}`}
               >
                 <button
                   type="button"
@@ -704,6 +705,7 @@ function AnimalsView() {
   const now = useNow()
   const animals = useGame((s) => s.animals)
   const unlocked = useGame((s) => s.unlocked)
+  const guideItemHighlights = useGame((s) => s.guideItemHighlights)
   const coins = useGame((s) => s.coins)
   const inventory = useGame((s) => s.inventory)
   const selectedAnimalBuilding = useGame((s) => s.selectedAnimalBuilding)
@@ -741,7 +743,7 @@ function AnimalsView() {
               <button
                 key={b.id}
                 type="button"
-                className={`machine-card ${locked ? 'locked' : ''}`}
+                className={`machine-card ${locked ? 'locked' : ''} ${!locked && guideItemHighlights.includes(b.id) ? 'guide-pulse-frame' : ''}`}
                 disabled={locked}
                 onClick={() => selectAnimalBuilding(b.id)}
               >
@@ -1155,6 +1157,7 @@ function ShopView() {
   const coins = useGame((s) => s.coins)
   const buySeed = useGame((s) => s.buySeed)
   const isCropAvailable = useGame((s) => s.isCropAvailable)
+  const guideItemHighlights = useGame((s) => s.guideItemHighlights)
 
   return (
     <div className="panel">
@@ -1166,7 +1169,10 @@ function ShopView() {
         {CROP_LIST.map((crop) => {
           const locked = !isCropAvailable(crop.id)
           return (
-            <div key={crop.id} className={`recipe-card ${locked ? 'locked' : ''}`}>
+            <div
+              key={crop.id}
+              className={`recipe-card ${locked ? 'locked' : ''} ${!locked && guideItemHighlights.includes(crop.id) ? 'guide-pulse-frame' : ''}`}
+            >
               <div className="recipe-top">
                 <span className="big-emoji">{crop.emoji}</span>
                 <div>
@@ -1209,6 +1215,7 @@ function AdventureView() {
   const inventory = useGame((s) => s.inventory)
   const materials = useGame((s) => s.materials)
   const unlocked = useGame((s) => s.unlocked)
+  const guideItemHighlights = useGame((s) => s.guideItemHighlights)
   const selectedGearBuilding = useGame((s) => s.selectedGearBuilding)
   const selectGearBuilding = useGame((s) => s.selectGearBuilding)
   const recruitNpc = useGame((s) => s.recruitNpc)
@@ -1429,7 +1436,7 @@ function AdventureView() {
                   <button
                     key={b.id}
                     type="button"
-                    className={`machine-card ${locked ? 'locked' : ''}`}
+                    className={`machine-card ${locked ? 'locked' : ''} ${!locked && guideItemHighlights.includes(b.id) ? 'guide-pulse-frame' : ''}`}
                     disabled={locked}
                     onClick={() => selectGearBuilding(b.id)}
                   >
@@ -1706,13 +1713,14 @@ function AdventureView() {
 function TabNav() {
   const tab = useGame((s) => s.tab)
   const setTab = useGame((s) => s.setTab)
+  const isTabPulsing = useGame((s) => s.isTabPulsing)
   return (
     <nav className="tabnav" aria-label="Main">
       {TABS.map((t) => (
         <button
           key={t.id}
           type="button"
-          className={tab === t.id ? 'active' : ''}
+          className={`${tab === t.id ? 'active' : ''} ${isTabPulsing(t.id) ? 'guide-pulse-frame' : ''}`}
           onClick={() => setTab(t.id)}
         >
           <span aria-hidden>{t.emoji}</span>

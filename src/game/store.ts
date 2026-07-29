@@ -20,6 +20,13 @@ import {
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
 import { ORDERS } from './data/orders'
 import { itemSellPrice, materialSellPrice, seedSellPrice } from './data/sellPrices'
+import { mergeUnlockGuides, tabShouldPulse } from './guides'
+import {
+  adoptLegacySaveIfNeeded,
+  mergePersistedSlice,
+  SAVE_STORAGE_KEY,
+  SAVE_VERSION,
+} from './saveStorage'
 import { migrateUnlockId, unlockMeta } from './unlocks'
 import type {
   ActiveAdventure,
@@ -234,6 +241,29 @@ function newUnlocks(prev: UnlockId[], next: UnlockId[]): UnlockId[] {
   return next.filter((u) => !seen.has(u))
 }
 
+function unlockGuidePatch(
+  s: { guideTabPulses: TabId[]; guideItemHighlights: string[]; unlocked: UnlockId[] },
+  nextUnlocked: UnlockId[],
+) {
+  return mergeUnlockGuides(
+    s.guideTabPulses,
+    s.guideItemHighlights,
+    newUnlocks(s.unlocked, nextUnlocked),
+  )
+}
+
+function shopGuidePatch(s: {
+  guideTabPulses: TabId[]
+  contextGuideTab: TabId | null
+}) {
+  const tabs = new Set(s.guideTabPulses)
+  tabs.add('shop')
+  return {
+    guideTabPulses: [...tabs],
+    contextGuideTab: 'shop' as TabId,
+  }
+}
+
 function enqueuePopups(
   queue: PopupState[],
   ...popups: (PopupState | null | undefined)[]
@@ -377,6 +407,74 @@ function firstMissionId(): string {
   return MISSIONS[0]?.id ?? 'm1_first_sprouts'
 }
 
+function migrateSaveState(
+  persisted: unknown,
+  version: number,
+): Record<string, unknown> {
+  const state = { ...(persisted as Record<string, unknown>) }
+  if (version < 3) {
+    if (Array.isArray(state.unlocked)) {
+      state.unlocked = migrateUnlocked(state.unlocked as string[])
+    }
+    if (state.inventory && typeof state.inventory === 'object') {
+      state.inventory = migrateInventory(
+        state.inventory as Partial<Record<string, number>>,
+      )
+    }
+  }
+  if (typeof state.xp === 'number' && Array.isArray(state.unlocked)) {
+    state.unlocked = syncLevelUnlocks(
+      state.xp,
+      state.unlocked as UnlockId[],
+    )
+  }
+  if (!Array.isArray(state.recruitedNpcs)) state.recruitedNpcs = []
+  if (!Array.isArray(state.activeAdventures)) state.activeAdventures = []
+  if (!state.materials || typeof state.materials !== 'object') {
+    state.materials = {}
+  }
+  if (!Array.isArray(state.gearInventory)) state.gearInventory = []
+  if (!Array.isArray(state.gearCraftQueue)) state.gearCraftQueue = []
+  const pane = state.adventurePane
+  if (pane !== 'tavern' && pane !== 'lands' && pane !== 'workshop') {
+    state.adventurePane = 'tavern'
+  }
+  if (version < 6) {
+    const unlocked = (state.unlocked as UnlockId[] | undefined) ?? []
+    const owned = new Set([
+      ...((state.ownedBuildings as BuildingId[] | undefined) ?? []),
+      ...unlocked.filter((u) => u in BUILDINGS),
+    ])
+    state.ownedBuildings = [...owned] as BuildingId[]
+    if (!state.machineQueueBonus || typeof state.machineQueueBonus !== 'object') {
+      state.machineQueueBonus = {}
+    }
+    const xp = typeof state.xp === 'number' ? state.xp : 0
+    if (
+      (state.unlocked as UnlockId[])?.includes('orders_board') &&
+      (!Array.isArray(state.activeOrders) ||
+        (state.activeOrders as ActiveOrder[]).length === 0)
+    ) {
+      state.activeOrders = pickOrders(levelFromXp(xp))
+    }
+  }
+  if (version < 7) {
+    if (!Array.isArray(state.guideTabPulses)) state.guideTabPulses = []
+    if (!Array.isArray(state.guideItemHighlights)) {
+      state.guideItemHighlights = []
+    }
+    if (state.contextGuideTab !== null && state.contextGuideTab !== undefined) {
+      const tabs = new Set([
+        ...((state.guideTabPulses as TabId[] | undefined) ?? []),
+      ])
+      tabs.add(state.contextGuideTab as TabId)
+      state.guideTabPulses = [...tabs]
+    }
+    state.contextGuideTab = null
+  }
+  return state
+}
+
 function cropAvailable(cropId: CropId, unlocked: UnlockId[]): boolean {
   const u = new Set(unlocked)
   switch (cropId) {
@@ -436,6 +534,9 @@ export interface GameState {
   gearCraftQueue: GearCraftJob[]
   popupQueue: PopupState[]
   toast: string | null
+  guideTabPulses: TabId[]
+  guideItemHighlights: string[]
+  contextGuideTab: TabId | null
 
   setTab: (tab: TabId) => void
   selectCrop: (id: CropId) => void
@@ -445,6 +546,7 @@ export interface GameState {
   setAdventurePane: (pane: AdventurePaneId) => void
   dismissPopup: () => void
   clearToast: () => void
+  isTabPulsing: (tab: TabId) => boolean
   isUnlocked: (id: UnlockId) => boolean
   isBuildingOwned: (id: BuildingId) => boolean
   isOrdersOpen: () => boolean
@@ -530,6 +632,9 @@ const initial = () => {
     gearCraftQueue: [] as GearCraftJob[],
     popupQueue: [] as PopupState[],
     toast: 'Welcome! Check Missions to unlock your Mill.' as string | null,
+    guideTabPulses: [] as TabId[],
+    guideItemHighlights: [] as string[],
+    contextGuideTab: null as TabId | null,
   }
 }
 
@@ -559,21 +664,67 @@ function bumpGoals(
   return changed ? next : progress
 }
 
+function persistedDefaults() {
+  const data = initial()
+  const {
+    tab: _tab,
+    toast: _toast,
+    popupQueue: _popupQueue,
+    contextGuideTab: _contextGuideTab,
+    ...rest
+  } = data
+  return rest
+}
+
+adoptLegacySaveIfNeeded()
+
 export const useGame = create<GameState>()(
   persist(
     (set, get) => ({
       ...initial(),
 
-      setTab: (tab) => set({ tab }),
+      setTab: (tab) =>
+        set((s) => ({
+          tab,
+          guideTabPulses: s.guideTabPulses.filter((t) => t !== tab),
+          contextGuideTab: s.contextGuideTab === tab ? null : s.contextGuideTab,
+        })),
       selectCrop: (id) => set({ selectedCrop: id }),
-      selectBuilding: (id) => set({ selectedBuilding: id }),
-      selectAnimalBuilding: (id) => set({ selectedAnimalBuilding: id }),
-      selectGearBuilding: (id) => set({ selectedGearBuilding: id }),
+      selectBuilding: (id) =>
+        set((s) => ({
+          selectedBuilding: id,
+          guideItemHighlights:
+            id != null
+              ? s.guideItemHighlights.filter((h) => h !== id)
+              : s.guideItemHighlights,
+        })),
+      selectAnimalBuilding: (id) =>
+        set((s) => ({
+          selectedAnimalBuilding: id,
+          guideItemHighlights:
+            id != null
+              ? s.guideItemHighlights.filter((h) => h !== id)
+              : s.guideItemHighlights,
+        })),
+      selectGearBuilding: (id) =>
+        set((s) => ({
+          selectedGearBuilding: id,
+          guideItemHighlights:
+            id != null
+              ? s.guideItemHighlights.filter((h) => h !== id)
+              : s.guideItemHighlights,
+        })),
       setAdventurePane: (pane) => set({ adventurePane: pane }),
       dismissPopup: () =>
         set((s) => ({ popupQueue: s.popupQueue.slice(1) })),
       clearToast: () => set({ toast: null }),
 
+      isTabPulsing: (tab) =>
+        tabShouldPulse(
+          tab,
+          get().guideTabPulses,
+          get().contextGuideTab,
+        ),
       isUnlocked: (id) => get().unlocked.includes(id),
       isBuildingOwned: (id) => get().ownedBuildings.includes(id),
       isOrdersOpen: () => get().unlocked.includes('orders_board'),
@@ -641,6 +792,13 @@ export const useGame = create<GameState>()(
           coins: s.coins - cost,
           seeds: { ...s.seeds, [id]: (s.seeds[id] ?? 0) + amount },
           toast: `Bought ${amount}× ${crop.name} seed`,
+          guideItemHighlights: s.guideItemHighlights.filter((h) => h !== id),
+          contextGuideTab:
+            s.contextGuideTab === 'shop' ? null : s.contextGuideTab,
+          guideTabPulses:
+            s.contextGuideTab === 'shop'
+              ? s.guideTabPulses.filter((t) => t !== 'shop')
+              : s.guideTabPulses,
         }))
         get().track('own_coins', undefined, get().coins)
       },
@@ -657,7 +815,10 @@ export const useGame = create<GameState>()(
           return
         }
         if ((s.seeds[cropId] ?? 0) < 1) {
-          set({ toast: 'No seeds — buy some in Shop' })
+          set((state) => ({
+            toast: 'No seeds — buy some in Shop',
+            ...shopGuidePatch(state),
+          }))
           return
         }
         const plots = s.plots.map((p, i) =>
@@ -691,6 +852,7 @@ export const useGame = create<GameState>()(
           s.unlocked,
           s.activeOrders,
         )
+        const guides = unlockGuidePatch(s, xpResult.unlocked)
         set({
           plots,
           inventory: addItem(s.inventory, cropId, crop.harvestQty),
@@ -698,6 +860,8 @@ export const useGame = create<GameState>()(
           popupQueue: xpResult.popupQueue,
           unlocked: xpResult.unlocked,
           activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
           toast: `Harvested ${crop.harvestQty}× ${crop.name}`,
         })
         get().track('harvest', cropId, crop.harvestQty)
@@ -775,6 +939,7 @@ export const useGame = create<GameState>()(
           s.unlocked,
           s.activeOrders,
         )
+        const guides = unlockGuidePatch(s, xpResult.unlocked)
         set({
           craftQueue,
           inventory: addItem(s.inventory, recipe.output, recipe.outputQty),
@@ -782,6 +947,8 @@ export const useGame = create<GameState>()(
           popupQueue: xpResult.popupQueue,
           unlocked: xpResult.unlocked,
           activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
           toast: `Collected ${recipe.name}`,
         })
         get().track('craft', recipe.output, recipe.outputQty)
@@ -916,12 +1083,15 @@ export const useGame = create<GameState>()(
           s.unlocked,
           s.activeOrders,
         )
+        const guides = unlockGuidePatch(s, xpResult.unlocked)
         set({
           inventory: addItem(s.inventory, def.product, def.productQty),
           xp: xpResult.xp,
           popupQueue: xpResult.popupQueue,
           unlocked: xpResult.unlocked,
           activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
           animals: s.animals.map((a) =>
             a.id === animalId
               ? { ...a, startedAt: needsFeed ? null : Date.now() }
@@ -963,6 +1133,7 @@ export const useGame = create<GameState>()(
             ? { orderId: replacement?.orderId ?? order.id, slot }
             : o,
         )
+        const guides = unlockGuidePatch(s, xpResult.unlocked)
         set({
           inventory: takeItems(s.inventory, order.needs),
           coins: s.coins + order.rewardCoins,
@@ -970,6 +1141,8 @@ export const useGame = create<GameState>()(
           popupQueue: xpResult.popupQueue,
           unlocked: xpResult.unlocked,
           activeOrders: activeOrdersAfter,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
           toast: `+${order.rewardCoins} coins · +${order.rewardXp} XP`,
         })
         get().track('fulfill_order', undefined, 1)
@@ -1077,6 +1250,7 @@ export const useGame = create<GameState>()(
         const blueprintUnlock = mission.unlocks.find(
           (u) => u in BUILDINGS,
         ) as BuildingId | undefined
+        const guides = unlockGuidePatch(s, xpResult.unlocked)
         set({
           coins: s.coins + mission.rewardCoins,
           xp: xpResult.xp,
@@ -1086,6 +1260,8 @@ export const useGame = create<GameState>()(
           activeMissionId: next?.id ?? null,
           missionProgress: next ? emptyProgress(next.goals, next.id) : {},
           activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
           popupQueue: enqueuePopups(
             xpResult.popupQueue,
             unlockPopup(freshUnlocks, 'Mission complete'),
@@ -1148,12 +1324,15 @@ export const useGame = create<GameState>()(
           unlocked,
           s.activeOrders,
         )
+        const guides = unlockGuidePatch(s, xpResult.unlocked)
         set({
           coins: s.coins + event.rewardCoins,
           xp: xpResult.xp,
           inventory: addItems(s.inventory, event.rewardItems),
           unlocked: xpResult.unlocked,
           activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
           completedEvents: [...s.completedEvents, id],
           activeEventId: null,
           eventEndsAt: null,
@@ -1261,6 +1440,7 @@ export const useGame = create<GameState>()(
           s.unlocked,
           s.activeOrders,
         )
+        const guides = unlockGuidePatch(s, xpResult.unlocked)
         set({
           activeAdventures: s.activeAdventures.filter((a) => a.id !== jobId),
           coins: s.coins + adventure.rewardCoins,
@@ -1268,6 +1448,8 @@ export const useGame = create<GameState>()(
           popupQueue: xpResult.popupQueue,
           unlocked: xpResult.unlocked,
           activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
           inventory: addItems(s.inventory, adventure.rewardItems),
           materials: addMaterials(s.materials, adventure.rewardMaterials),
           toast: `${adventure.name} complete! +${adventure.rewardCoins} coins`,
@@ -1335,6 +1517,7 @@ export const useGame = create<GameState>()(
           s.unlocked,
           s.activeOrders,
         )
+        const guides = unlockGuidePatch(s, xpResult.unlocked)
         set({
           gearCraftQueue: s.gearCraftQueue.filter((_, i) => i !== index),
           gearInventory: [...s.gearInventory, gear],
@@ -1342,6 +1525,8 @@ export const useGame = create<GameState>()(
           popupQueue: xpResult.popupQueue,
           unlocked: xpResult.unlocked,
           activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
           toast: `Crafted ${blueprint.name}!`,
         })
       },
@@ -1396,58 +1581,19 @@ export const useGame = create<GameState>()(
       resetGame: () => set({ ...initial() }),
     }),
     {
-      name: 'cozy-valley-save-v6',
-      version: 6,
-      migrate: (persisted: unknown, version: number) => {
-        const state = persisted as Record<string, unknown>
-        if (version < 3) {
-          if (Array.isArray(state.unlocked)) {
-            state.unlocked = migrateUnlocked(state.unlocked as string[])
-          }
-          if (state.inventory && typeof state.inventory === 'object') {
-            state.inventory = migrateInventory(
-              state.inventory as Partial<Record<string, number>>,
-            )
-          }
+      name: SAVE_STORAGE_KEY,
+      version: SAVE_VERSION,
+      migrate: (persisted, version) => {
+        try {
+          return migrateSaveState(persisted, version)
+        } catch {
+          return migrateSaveState(persisted, SAVE_VERSION)
         }
-        if (typeof state.xp === 'number' && Array.isArray(state.unlocked)) {
-          state.unlocked = syncLevelUnlocks(
-            state.xp,
-            state.unlocked as UnlockId[],
-          )
-        }
-        if (!Array.isArray(state.recruitedNpcs)) state.recruitedNpcs = []
-        if (!Array.isArray(state.activeAdventures)) state.activeAdventures = []
-        if (!state.materials || typeof state.materials !== 'object') {
-          state.materials = {}
-        }
-        if (!Array.isArray(state.gearInventory)) state.gearInventory = []
-        if (!Array.isArray(state.gearCraftQueue)) state.gearCraftQueue = []
-        const pane = state.adventurePane
-        if (pane !== 'tavern' && pane !== 'lands' && pane !== 'workshop') {
-          state.adventurePane = 'tavern'
-        }
-        if (version < 6) {
-          const unlocked = (state.unlocked as UnlockId[] | undefined) ?? []
-          const owned = new Set([
-            ...((state.ownedBuildings as BuildingId[] | undefined) ?? []),
-            ...unlocked.filter((u) => u in BUILDINGS),
-          ])
-          state.ownedBuildings = [...owned] as BuildingId[]
-          if (!state.machineQueueBonus || typeof state.machineQueueBonus !== 'object') {
-            state.machineQueueBonus = {}
-          }
-          const xp = typeof state.xp === 'number' ? state.xp : 0
-          if (
-            (state.unlocked as UnlockId[])?.includes('orders_board') &&
-            (!Array.isArray(state.activeOrders) ||
-              (state.activeOrders as ActiveOrder[]).length === 0)
-          ) {
-            state.activeOrders = pickOrders(levelFromXp(xp))
-          }
-        }
-        return state
       },
+      merge: (persisted, current) => ({
+        ...current,
+        ...mergePersistedSlice(persisted, persistedDefaults()),
+      }),
       partialize: (s) => ({
         coins: s.coins,
         xp: s.xp,
@@ -1477,6 +1623,8 @@ export const useGame = create<GameState>()(
         activeAdventures: s.activeAdventures,
         gearInventory: s.gearInventory,
         gearCraftQueue: s.gearCraftQueue,
+        guideTabPulses: s.guideTabPulses,
+        guideItemHighlights: s.guideItemHighlights,
       }),
     },
   ),
