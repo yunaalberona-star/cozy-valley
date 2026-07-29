@@ -48,6 +48,7 @@ import {
   seedSellPrice,
 } from './game/data/sellPrices'
 import { unlockLabel } from './game/unlocks'
+import { tabShouldPulse } from './game/guides'
 import {
   adventureProgress,
   adventureReady,
@@ -1726,14 +1727,15 @@ function AdventureView() {
 function TabNav() {
   const tab = useGame((s) => s.tab)
   const setTab = useGame((s) => s.setTab)
-  const isTabPulsing = useGame((s) => s.isTabPulsing)
+  const guideTabPulses = useGame((s) => s.guideTabPulses)
+  const contextGuideTab = useGame((s) => s.contextGuideTab)
   return (
     <nav className="tabnav" aria-label="Main">
       {TABS.map((t) => (
         <button
           key={t.id}
           type="button"
-          className={`${tab === t.id ? 'active' : ''} ${isTabPulsing(t.id) ? 'guide-pulse-frame' : ''}`}
+          className={`${tab === t.id ? 'active' : ''} ${tabShouldPulse(t.id, guideTabPulses, contextGuideTab) ? 'guide-pulse-frame' : ''}`}
           onClick={() => setTab(t.id)}
         >
           <span aria-hidden>{t.emoji}</span>

@@ -53,6 +53,15 @@ export function mergeUnlockGuides(
     }
     for (const crop of guideCropsForUnlock(id)) items.add(crop)
   }
+  // Re-show tab pulses for any tab that still has unseen item highlights.
+  for (const item of items) {
+    if (item in BUILDINGS || item in ANIMAL_BUILDINGS || item in GEAR_BUILDINGS) {
+      for (const tab of guideTabsForUnlock(item as UnlockId)) tabs.add(tab)
+    }
+    if (item in CROPS) {
+      tabs.add('shop')
+    }
+  }
   return {
     guideTabPulses: [...tabs],
     guideItemHighlights: [...items],
