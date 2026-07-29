@@ -537,6 +537,7 @@ export interface GameState {
   guideTabPulses: TabId[]
   guideItemHighlights: string[]
   contextGuideTab: TabId | null
+  darkMode: boolean
 
   setTab: (tab: TabId) => void
   selectCrop: (id: CropId) => void
@@ -546,6 +547,7 @@ export interface GameState {
   setAdventurePane: (pane: AdventurePaneId) => void
   dismissPopup: () => void
   clearToast: () => void
+  toggleDarkMode: () => void
   isTabPulsing: (tab: TabId) => boolean
   isUnlocked: (id: UnlockId) => boolean
   isBuildingOwned: (id: BuildingId) => boolean
@@ -635,6 +637,7 @@ const initial = () => {
     guideTabPulses: [] as TabId[],
     guideItemHighlights: [] as string[],
     contextGuideTab: null as TabId | null,
+    darkMode: false,
   }
 }
 
@@ -718,6 +721,8 @@ export const useGame = create<GameState>()(
       dismissPopup: () =>
         set((s) => ({ popupQueue: s.popupQueue.slice(1) })),
       clearToast: () => set({ toast: null }),
+
+      toggleDarkMode: () => set((s) => ({ darkMode: !s.darkMode })),
 
       isTabPulsing: (tab) =>
         tabShouldPulse(
@@ -1625,6 +1630,7 @@ export const useGame = create<GameState>()(
         gearCraftQueue: s.gearCraftQueue,
         guideTabPulses: s.guideTabPulses,
         guideItemHighlights: s.guideItemHighlights,
+        darkMode: s.darkMode,
       }),
     },
   ),

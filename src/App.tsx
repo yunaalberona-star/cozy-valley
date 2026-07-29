@@ -102,6 +102,8 @@ const TABS: { id: TabId; label: string; emoji: string }[] = [
 function TopBar() {
   const coins = useGame((s) => s.coins)
   const xp = useGame((s) => s.xp)
+  const darkMode = useGame((s) => s.darkMode)
+  const toggleDarkMode = useGame((s) => s.toggleDarkMode)
   const { level, into, need } = xpProgress(xp)
   const pct = Math.min(100, (into / need) * 100)
 
@@ -121,10 +123,21 @@ function TopBar() {
           <span>🪙</span>
           <strong>{coins}</strong>
         </div>
-        <div className="stat level">
-          <span className="lvl">Lv {level}</span>
-          <div className="xp-track" aria-hidden>
-            <div className="xp-fill" style={{ width: `${pct}%` }} />
+        <div className="stat-level-col">
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleDarkMode}
+            aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={darkMode ? 'Light mode' : 'Dark mode'}
+          >
+            {darkMode ? '☀️' : '🌙'}
+          </button>
+          <div className="stat level">
+            <span className="lvl">Lv {level}</span>
+            <div className="xp-track" aria-hidden>
+              <div className="xp-fill" style={{ width: `${pct}%` }} />
+            </div>
           </div>
         </div>
       </div>
@@ -1733,9 +1746,14 @@ function TabNav() {
 
 export default function App() {
   const tab = useGame((s) => s.tab)
+  const darkMode = useGame((s) => s.darkMode)
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('theme-dark', darkMode)
+  }, [darkMode])
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${darkMode ? 'theme-dark' : ''}`}>
       <div className="sky" aria-hidden />
       <div className="meadow" aria-hidden />
       <div className="app">

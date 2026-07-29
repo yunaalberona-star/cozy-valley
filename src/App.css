@@ -22,6 +22,71 @@
   --font-ui: 'Nunito', system-ui, sans-serif;
 }
 
+html.theme-dark {
+  color-scheme: dark;
+}
+
+html.theme-dark {
+  --ink: #e8efe4;
+  --ink-soft: #c8d6c2;
+  --muted: #9ab092;
+  --leaf: #7bc275;
+  --leaf-deep: #a8dba0;
+  --leaf-soft: #4a7a48;
+  --sky: #2a3d52;
+  --sky-deep: #1e2d3d;
+  --soil: #8b6344;
+  --soil-light: #a67b55;
+  --cream: #1a2418;
+  --panel: rgba(22, 32, 20, 0.94);
+  --panel-edge: rgba(143, 191, 122, 0.18);
+  --coin: #e8b84a;
+  --danger: #e07a6a;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+html.theme-dark body {
+  background: #152018;
+}
+
+html.theme-dark .sky {
+  background:
+    radial-gradient(ellipse 70% 50% at 65% 15%, rgba(120, 160, 200, 0.15), transparent 55%),
+    linear-gradient(180deg, #1a2838 0%, #243828 100%);
+}
+
+html.theme-dark .meadow {
+  background:
+    radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.04), transparent 40%),
+    repeating-linear-gradient(
+      -12deg,
+      transparent,
+      transparent 14px,
+      rgba(20, 40, 18, 0.12) 14px,
+      rgba(20, 40, 18, 0.12) 15px
+    ),
+    linear-gradient(180deg, #2d4a2a 0%, #243d24 55%, #1a2e1c 100%);
+}
+
+html.theme-dark .tabnav {
+  background: rgba(18, 28, 16, 0.98);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.35);
+}
+
+html.theme-dark .theme-toggle {
+  background: rgba(123, 194, 117, 0.12);
+  border-color: rgba(143, 191, 122, 0.25);
+}
+
+html.theme-dark .theme-toggle:hover {
+  background: rgba(123, 194, 117, 0.22);
+}
+
+html.theme-dark .guide-pulse-frame::after {
+  border-color: #f0b840;
+  box-shadow: 0 0 12px rgba(240, 184, 64, 0.5);
+}
+
 *,
 *::before,
 *::after {
@@ -164,6 +229,38 @@ button {
 
 .stat.level {
   min-width: 88px;
+}
+
+.stat-level-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.theme-toggle {
+  border: 1px solid var(--panel-edge);
+  background: rgba(63, 122, 69, 0.1);
+  border-radius: 999px;
+  width: 32px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0;
+  transition:
+    background 0.2s ease,
+    transform 0.15s ease;
+}
+
+.theme-toggle:hover {
+  background: rgba(63, 122, 69, 0.2);
+  transform: scale(1.05);
+}
+
+.theme-toggle:active {
+  transform: scale(0.96);
 }
 
 .lvl {
