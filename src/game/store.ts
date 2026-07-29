@@ -1164,10 +1164,7 @@ export const useGame = create<GameState>()(
           }
         }
 
-        const missionPatch = resolveMissionProgress(
-          { ...s, missionProgress },
-          missionProgress,
-        )
+        const missionPatch = resolveMissionProgress(s, missionProgress)
 
         if (
           missionPatch.missionProgress !== s.missionProgress ||
