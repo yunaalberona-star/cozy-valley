@@ -1,0 +1,1543 @@
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import { ANIMALS } from './data/animals'
+import { ANIMAL_BUILDINGS } from './data/animalBuildings'
+import { ADVENTURE_BY_ID, TAVERN_UNLOCK_LEVEL } from './data/adventures'
+import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
+import { CROPS, levelFromXp } from './data/crops'
+import {
+  GEAR_BLUEPRINT_BY_ID,
+  GEAR_BUILDINGS,
+  MATERIAL_META,
+  partyEffectiveSkill,
+} from './data/gear'
+import {
+  EVENT_BY_ID,
+  EVENTS,
+  MISSION_BY_ID,
+  MISSIONS,
+} from './data/missions'
+import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
+import { ORDERS } from './data/orders'
+import { itemSellPrice, materialSellPrice, seedSellPrice } from './data/sellPrices'
+import { migrateUnlockId, unlockMeta } from './unlocks'
+import type {
+  ActiveAdventure,
+  ActiveOrder,
+  AdventurePaneId,
+  AnimalBuildingId,
+  AnimalInstance,
+  AnimalTypeId,
+  BuildingId,
+  CraftJob,
+  CraftResourceId,
+  CropId,
+  GearBuildingId,
+  GearCraftJob,
+  GearInstance,
+  ItemId,
+  MaterialId,
+  MissionGoal,
+  PlotState,
+  PopupState,
+  RecruitedNpc,
+  TabId,
+  UnlockId,
+} from './types'
+
+const START_PLOTS = 6
+const MAX_PLOTS = 16
+const ORDER_SLOTS = 3
+const PLOT_UNLOCK_BASE = 40
+
+function emptyPlots(count: number): PlotState[] {
+  return Array.from({ length: count }, () => ({
+    cropId: null,
+    plantedAt: null,
+  }))
+}
+
+function uid(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+function pickOrders(level: number, exclude: string[] = []): ActiveOrder[] {
+  const pool = ORDERS.filter(
+    (o) => o.unlockLevel <= level && !exclude.includes(o.id),
+  )
+  const fallback = ORDERS.filter((o) => o.unlockLevel <= level)
+  const source = pool.length >= ORDER_SLOTS ? pool : fallback
+  const shuffled = [...source].sort(() => Math.random() - 0.5)
+  return shuffled.slice(0, ORDER_SLOTS).map((o, slot) => ({
+    orderId: o.id,
+    slot,
+  }))
+}
+
+function hasItems(
+  inventory: Partial<Record<ItemId, number>>,
+  needs: Partial<Record<ItemId, number>>,
+): boolean {
+  return Object.entries(needs).every(
+    ([id, qty]) => (inventory[id as ItemId] ?? 0) >= (qty ?? 0),
+  )
+}
+
+function takeMaterial(
+  materials: Partial<Record<MaterialId, number>>,
+  needs: Partial<Record<MaterialId, number>>,
+): Partial<Record<MaterialId, number>> {
+  const next = { ...materials }
+  for (const [id, qty] of Object.entries(needs)) {
+    const key = id as MaterialId
+    const left = (next[key] ?? 0) - (qty ?? 0)
+    if (left <= 0) delete next[key]
+    else next[key] = left
+  }
+  return next
+}
+
+function takeSeeds(
+  seeds: Partial<Record<CropId, number>>,
+  needs: Partial<Record<CropId, number>>,
+): Partial<Record<CropId, number>> {
+  const next = { ...seeds }
+  for (const [id, qty] of Object.entries(needs)) {
+    const key = id as CropId
+    const left = (next[key] ?? 0) - (qty ?? 0)
+    if (left <= 0) delete next[key]
+    else next[key] = left
+  }
+  return next
+}
+
+function takeItems(
+  inventory: Partial<Record<ItemId, number>>,
+  needs: Partial<Record<ItemId, number>>,
+): Partial<Record<ItemId, number>> {
+  const next = { ...inventory }
+  for (const [id, qty] of Object.entries(needs)) {
+    const key = id as ItemId
+    const left = (next[key] ?? 0) - (qty ?? 0)
+    if (left <= 0) delete next[key]
+    else next[key] = left
+  }
+  return next
+}
+
+function addItem(
+  inventory: Partial<Record<ItemId, number>>,
+  id: ItemId,
+  qty: number,
+): Partial<Record<ItemId, number>> {
+  return { ...inventory, [id]: (inventory[id] ?? 0) + qty }
+}
+
+function addItems(
+  inventory: Partial<Record<ItemId, number>>,
+  items?: Partial<Record<ItemId, number>>,
+): Partial<Record<ItemId, number>> {
+  if (!items) return inventory
+  let next = inventory
+  for (const [id, qty] of Object.entries(items)) {
+    next = addItem(next, id as ItemId, qty ?? 0)
+  }
+  return next
+}
+
+function addMaterial(
+  materials: Partial<Record<MaterialId, number>>,
+  id: MaterialId,
+  qty: number,
+): Partial<Record<MaterialId, number>> {
+  return { ...materials, [id]: (materials[id] ?? 0) + qty }
+}
+
+function addMaterials(
+  materials: Partial<Record<MaterialId, number>>,
+  items?: Partial<Record<MaterialId, number>>,
+): Partial<Record<MaterialId, number>> {
+  if (!items) return materials
+  let next = materials
+  for (const [id, qty] of Object.entries(items)) {
+    next = addMaterial(next, id as MaterialId, qty ?? 0)
+  }
+  return next
+}
+
+function isMaterialId(id: string): id is MaterialId {
+  return ['iron_ore', 'leather_scrap', 'magic_essence', 'sunstone'].includes(id)
+}
+
+function hasResources(
+  inventory: Partial<Record<ItemId, number>>,
+  materials: Partial<Record<MaterialId, number>>,
+  needs: Partial<Record<CraftResourceId, number>>,
+): boolean {
+  return Object.entries(needs).every(([id, qty]) => {
+    if (isMaterialId(id)) return (materials[id] ?? 0) >= (qty ?? 0)
+    return (inventory[id as ItemId] ?? 0) >= (qty ?? 0)
+  })
+}
+
+function takeResources(
+  inventory: Partial<Record<ItemId, number>>,
+  materials: Partial<Record<MaterialId, number>>,
+  needs: Partial<Record<CraftResourceId, number>>,
+): {
+  inventory: Partial<Record<ItemId, number>>
+  materials: Partial<Record<MaterialId, number>>
+} {
+  let nextInv = { ...inventory }
+  let nextMat = { ...materials }
+  for (const [id, qty] of Object.entries(needs)) {
+    const need = qty ?? 0
+    if (isMaterialId(id)) {
+      const left = (nextMat[id] ?? 0) - need
+      if (left <= 0) delete nextMat[id]
+      else nextMat[id] = left
+    } else {
+      const key = id as ItemId
+      const left = (nextInv[key] ?? 0) - need
+      if (left <= 0) delete nextInv[key]
+      else nextInv[key] = left
+    }
+  }
+  return { inventory: nextInv, materials: nextMat }
+}
+
+function migrateInventory(
+  inventory: Partial<Record<string, number>>,
+): Partial<Record<ItemId, number>> {
+  const next = { ...inventory } as Partial<Record<ItemId, number>>
+  const legacyFeed = inventory.feed
+  if (legacyFeed != null && legacyFeed > 0) {
+    delete (next as Record<string, number>).feed
+    next.chicken_feed = (next.chicken_feed ?? 0) + legacyFeed
+  }
+  return next
+}
+
+function migrateUnlocked(unlocked: string[]): UnlockId[] {
+  return [...new Set(unlocked.map((u) => migrateUnlockId(u)))] as UnlockId[]
+}
+
+function unlockPopupItems(ids: UnlockId[]): PopupState['items'] {
+  return ids.map((id) => {
+    const meta = unlockMeta(id)
+    return { emoji: meta.emoji, name: meta.name }
+  })
+}
+
+function newUnlocks(prev: UnlockId[], next: UnlockId[]): UnlockId[] {
+  const seen = new Set(prev)
+  return next.filter((u) => !seen.has(u))
+}
+
+function enqueuePopups(
+  queue: PopupState[],
+  ...popups: (PopupState | null | undefined)[]
+): PopupState[] {
+  return [...queue, ...popups.filter((p): p is PopupState => p != null)]
+}
+
+function applyXpGain(
+  xp: number,
+  amount: number,
+  popupQueue: PopupState[],
+  unlocked: UnlockId[],
+  activeOrders: ActiveOrder[],
+): {
+  xp: number
+  popupQueue: PopupState[]
+  unlocked: UnlockId[]
+  activeOrders: ActiveOrder[]
+} {
+  if (amount <= 0) return { xp, popupQueue, unlocked, activeOrders }
+  const oldLevel = levelFromXp(xp)
+  const nextXp = xp + amount
+  const newLevel = levelFromXp(nextXp)
+  if (newLevel <= oldLevel) return { xp: nextXp, popupQueue, unlocked, activeOrders }
+
+  let nextUnlocked = unlocked
+  let nextQueue = popupQueue
+  let nextOrders = activeOrders
+  const levelIds = levelUnlocksCrossing(oldLevel, newLevel).filter(
+    (u) => !unlocked.includes(u),
+  )
+  if (levelIds.length > 0) {
+    nextUnlocked = [...new Set([...unlocked, ...levelIds])]
+    nextQueue = enqueuePopups(
+      nextQueue,
+      unlockPopup(
+        levelIds,
+        levelIds.includes('orders_board')
+          ? `Reached Level ${ORDERS_UNLOCK_LEVEL}!`
+          : `Reached Level ${TAVERN_UNLOCK_LEVEL}!`,
+      ),
+    )
+    if (levelIds.includes('orders_board') && activeOrders.length === 0) {
+      nextOrders = pickOrders(newLevel)
+    }
+  }
+  nextQueue = enqueuePopups(nextQueue, {
+    kind: 'level_up',
+    title: `Level ${newLevel}!`,
+    subtitle: 'Your valley grows stronger.',
+    items: [{ emoji: '⭐', name: `Level ${newLevel}` }],
+  })
+  return {
+    xp: nextXp,
+    popupQueue: nextQueue,
+    unlocked: nextUnlocked,
+    activeOrders: nextOrders,
+  }
+}
+
+const LEVEL_FEATURE_UNLOCKS: { level: number; ids: UnlockId[] }[] = [
+  { level: ORDERS_UNLOCK_LEVEL, ids: ['orders_board'] },
+  {
+    level: TAVERN_UNLOCK_LEVEL,
+    ids: [
+      'tavern',
+      'adventure_land',
+      'valley_forge',
+      'weavers_hut',
+      'tinker_shed',
+    ],
+  },
+]
+
+function levelUnlocksCrossing(oldLevel: number, newLevel: number): UnlockId[] {
+  const ids: UnlockId[] = []
+  for (const entry of LEVEL_FEATURE_UNLOCKS) {
+    if (oldLevel < entry.level && newLevel >= entry.level) {
+      ids.push(...entry.ids)
+    }
+  }
+  return ids
+}
+
+function syncLevelUnlocks(xp: number, unlocked: UnlockId[]): UnlockId[] {
+  const level = levelFromXp(xp)
+  let next = unlocked
+  for (const entry of LEVEL_FEATURE_UNLOCKS) {
+    if (level >= entry.level) {
+      next = [...new Set([...next, ...entry.ids])]
+    }
+  }
+  return next
+}
+
+function busyNpcIds(activeAdventures: ActiveAdventure[]): Set<string> {
+  return new Set(activeAdventures.flatMap((a) => a.npcInstanceIds))
+}
+
+function baseNpcSkill(npcId: string): number {
+  return NPCS[npcId]?.skill ?? 0
+}
+
+function partySkill(
+  npcInstanceIds: string[],
+  recruited: RecruitedNpc[],
+  gearInventory: GearInstance[],
+): number {
+  return partyEffectiveSkill(
+    npcInstanceIds,
+    recruited,
+    gearInventory,
+    baseNpcSkill,
+  )
+}
+
+function unlockPopup(
+  ids: UnlockId[],
+  subtitle: string,
+): PopupState | null {
+  if (ids.length === 0) return null
+  return {
+    kind: 'unlock',
+    title: ids.length === 1 ? 'Something unlocked!' : 'New unlocks!',
+    subtitle,
+    items: unlockPopupItems(ids),
+  }
+}
+
+function goalKey(missionOrEventId: string, goalId: string): string {
+  return `${missionOrEventId}:${goalId}`
+}
+
+function emptyProgress(goals: MissionGoal[], id: string): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const g of goals) out[goalKey(id, g.id)] = 0
+  return out
+}
+
+function firstMissionId(): string {
+  return MISSIONS[0]?.id ?? 'm1_first_sprouts'
+}
+
+function cropAvailable(cropId: CropId, unlocked: UnlockId[]): boolean {
+  const u = new Set(unlocked)
+  switch (cropId) {
+    case 'wheat':
+    case 'carrot':
+      return true
+    case 'corn':
+    case 'tomato':
+      return u.has('mill')
+    case 'oat':
+    case 'berry':
+    case 'strawberry':
+      return u.has('bakery') || u.has('juice_press')
+    case 'sugarcane':
+      return u.has('sugar_mill')
+    case 'grape':
+      return u.has('juice_press') || u.has('winery')
+    case 'cotton':
+      return u.has('loom')
+    case 'pumpkin':
+    case 'sunflower':
+      return u.has('kitchen') || u.has('loom')
+    default:
+      return true
+  }
+}
+
+export interface GameState {
+  coins: number
+  xp: number
+  seeds: Partial<Record<CropId, number>>
+  inventory: Partial<Record<ItemId, number>>
+  materials: Partial<Record<MaterialId, number>>
+  plots: PlotState[]
+  selectedCrop: CropId
+  tab: TabId
+  craftQueue: CraftJob[]
+  activeOrders: ActiveOrder[]
+  animals: AnimalInstance[]
+  unlocked: UnlockId[]
+  ownedBuildings: BuildingId[]
+  machineQueueBonus: Partial<Record<BuildingId, number>>
+  completedMissions: string[]
+  activeMissionId: string | null
+  missionProgress: Record<string, number>
+  activeEventId: string | null
+  eventEndsAt: number | null
+  eventProgress: Record<string, number>
+  completedEvents: string[]
+  selectedBuilding: BuildingId | null
+  selectedAnimalBuilding: AnimalBuildingId | null
+  selectedGearBuilding: GearBuildingId | null
+  adventurePane: AdventurePaneId
+  recruitedNpcs: RecruitedNpc[]
+  activeAdventures: ActiveAdventure[]
+  gearInventory: GearInstance[]
+  gearCraftQueue: GearCraftJob[]
+  popupQueue: PopupState[]
+  toast: string | null
+
+  setTab: (tab: TabId) => void
+  selectCrop: (id: CropId) => void
+  selectBuilding: (id: BuildingId | null) => void
+  selectAnimalBuilding: (id: AnimalBuildingId | null) => void
+  selectGearBuilding: (id: GearBuildingId | null) => void
+  setAdventurePane: (pane: AdventurePaneId) => void
+  dismissPopup: () => void
+  clearToast: () => void
+  isUnlocked: (id: UnlockId) => boolean
+  isBuildingOwned: (id: BuildingId) => boolean
+  isOrdersOpen: () => boolean
+  isCropAvailable: (id: CropId) => boolean
+  isTavernOpen: () => boolean
+  machineQueueCapacity: (id: BuildingId) => number
+
+  buySeed: (id: CropId, amount?: number) => void
+  plant: (plotIndex: number) => void
+  harvest: (plotIndex: number) => void
+  unlockPlot: () => void
+
+  startCraft: (recipeId: string) => void
+  collectCraft: (index: number) => void
+  purchaseBuilding: (id: BuildingId) => void
+  upgradeMachineQueue: (id: BuildingId) => void
+
+  buyAnimal: (typeId: AnimalTypeId) => void
+  feedAnimal: (animalId: string) => void
+  collectAnimal: (animalId: string) => void
+
+  fulfillOrder: (slot: number) => void
+  refreshOrders: () => void
+
+  sellGoods: (id: ItemId, qty?: number) => void
+  sellSeeds: (id: CropId, qty?: number) => void
+  sellMaterial: (id: MaterialId, qty?: number) => void
+
+  claimMission: () => void
+  startEvent: (eventId: string) => void
+  claimEvent: () => void
+
+  recruitNpc: (npcId: string) => void
+  startAdventure: (adventureId: string, npcInstanceIds: string[]) => void
+  collectAdventure: (jobId: string) => void
+
+  startGearCraft: (blueprintId: string) => void
+  collectGearCraft: (index: number) => void
+  equipGear: (gearInstanceId: string, npcInstanceId: string) => void
+  unequipGear: (gearInstanceId: string) => void
+
+  track: (
+    kind: MissionGoal['kind'],
+    target: string | undefined,
+    amount?: number,
+  ) => void
+
+  resetGame: () => void
+}
+
+const initial = () => {
+  const missionId = firstMissionId()
+  const mission = MISSION_BY_ID[missionId]
+  return {
+    coins: 80,
+    xp: 0,
+    seeds: { wheat: 8, carrot: 4 } as Partial<Record<CropId, number>>,
+    inventory: {} as Partial<Record<ItemId, number>>,
+    materials: {} as Partial<Record<MaterialId, number>>,
+    plots: emptyPlots(START_PLOTS),
+    selectedCrop: 'wheat' as CropId,
+    tab: 'missions' as TabId,
+    craftQueue: [] as CraftJob[],
+    activeOrders: [] as ActiveOrder[],
+    animals: [] as AnimalInstance[],
+    unlocked: [] as UnlockId[],
+    ownedBuildings: [] as BuildingId[],
+    machineQueueBonus: {} as Partial<Record<BuildingId, number>>,
+    completedMissions: [] as string[],
+    activeMissionId: missionId as string | null,
+    missionProgress: mission ? emptyProgress(mission.goals, missionId) : {},
+    activeEventId: null as string | null,
+    eventEndsAt: null as number | null,
+    eventProgress: {} as Record<string, number>,
+    completedEvents: [] as string[],
+    selectedBuilding: null as BuildingId | null,
+    selectedAnimalBuilding: null as AnimalBuildingId | null,
+    selectedGearBuilding: null as GearBuildingId | null,
+    adventurePane: 'tavern' as AdventurePaneId,
+    recruitedNpcs: [] as RecruitedNpc[],
+    activeAdventures: [] as ActiveAdventure[],
+    gearInventory: [] as GearInstance[],
+    gearCraftQueue: [] as GearCraftJob[],
+    popupQueue: [] as PopupState[],
+    toast: 'Welcome! Check Missions to unlock your Mill.' as string | null,
+  }
+}
+
+function bumpGoals(
+  progress: Record<string, number>,
+  goals: MissionGoal[],
+  parentId: string,
+  kind: MissionGoal['kind'],
+  target: string | undefined,
+  amount: number,
+): Record<string, number> {
+  let changed = false
+  const next = { ...progress }
+  for (const g of goals) {
+    if (g.kind !== kind) continue
+    if (g.target != null && g.target !== target) continue
+    const key = goalKey(parentId, g.id)
+    const cur = next[key] ?? 0
+    if (cur >= g.amount) continue
+    if (kind === 'own_coins') {
+      next[key] = Math.min(g.amount, amount)
+    } else {
+      next[key] = Math.min(g.amount, cur + amount)
+    }
+    changed = true
+  }
+  return changed ? next : progress
+}
+
+export const useGame = create<GameState>()(
+  persist(
+    (set, get) => ({
+      ...initial(),
+
+      setTab: (tab) => set({ tab }),
+      selectCrop: (id) => set({ selectedCrop: id }),
+      selectBuilding: (id) => set({ selectedBuilding: id }),
+      selectAnimalBuilding: (id) => set({ selectedAnimalBuilding: id }),
+      selectGearBuilding: (id) => set({ selectedGearBuilding: id }),
+      setAdventurePane: (pane) => set({ adventurePane: pane }),
+      dismissPopup: () =>
+        set((s) => ({ popupQueue: s.popupQueue.slice(1) })),
+      clearToast: () => set({ toast: null }),
+
+      isUnlocked: (id) => get().unlocked.includes(id),
+      isBuildingOwned: (id) => get().ownedBuildings.includes(id),
+      isOrdersOpen: () => get().unlocked.includes('orders_board'),
+      isCropAvailable: (id) => cropAvailable(id, get().unlocked),
+      isTavernOpen: () => get().unlocked.includes('tavern'),
+      machineQueueCapacity: (id) =>
+        machineQueueSize(id, get().machineQueueBonus),
+
+      track: (kind, target, amount = 1) => {
+        const s = get()
+        let missionProgress = s.missionProgress
+        let eventProgress = s.eventProgress
+
+        if (s.activeMissionId) {
+          const mission = MISSION_BY_ID[s.activeMissionId]
+          if (mission) {
+            const value = kind === 'own_coins' ? s.coins : amount
+            missionProgress = bumpGoals(
+              missionProgress,
+              mission.goals,
+              s.activeMissionId,
+              kind,
+              target,
+              value,
+            )
+          }
+        }
+
+        if (s.activeEventId && s.eventEndsAt && Date.now() < s.eventEndsAt) {
+          const event = EVENT_BY_ID[s.activeEventId]
+          if (event) {
+            const value = kind === 'own_coins' ? s.coins : amount
+            eventProgress = bumpGoals(
+              eventProgress,
+              event.goals,
+              s.activeEventId,
+              kind,
+              target,
+              value,
+            )
+          }
+        }
+
+        if (
+          missionProgress !== s.missionProgress ||
+          eventProgress !== s.eventProgress
+        ) {
+          set({ missionProgress, eventProgress })
+        }
+      },
+
+      buySeed: (id, amount = 1) => {
+        const crop = CROPS[id]
+        if (!crop) return
+        if (!get().isCropAvailable(id)) {
+          set({ toast: 'Crop locked — finish missions to unlock' })
+          return
+        }
+        const cost = crop.seedCost * amount
+        if (get().coins < cost) {
+          set({ toast: 'Not enough coins' })
+          return
+        }
+        set((s) => ({
+          coins: s.coins - cost,
+          seeds: { ...s.seeds, [id]: (s.seeds[id] ?? 0) + amount },
+          toast: `Bought ${amount}× ${crop.name} seed`,
+        }))
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      plant: (plotIndex) => {
+        const s = get()
+        const plot = s.plots[plotIndex]
+        if (!plot || plot.cropId) return
+        const cropId = s.selectedCrop
+        const crop = CROPS[cropId]
+        if (!crop) return
+        if (!s.isCropAvailable(cropId)) {
+          set({ toast: 'Crop locked — finish missions to unlock' })
+          return
+        }
+        if ((s.seeds[cropId] ?? 0) < 1) {
+          set({ toast: 'No seeds — buy some in Shop' })
+          return
+        }
+        const plots = s.plots.map((p, i) =>
+          i === plotIndex ? { cropId, plantedAt: Date.now() } : p,
+        )
+        const seeds = { ...s.seeds }
+        const left = (seeds[cropId] ?? 0) - 1
+        if (left <= 0) delete seeds[cropId]
+        else seeds[cropId] = left
+        set({ plots, seeds })
+      },
+
+      harvest: (plotIndex) => {
+        const s = get()
+        const plot = s.plots[plotIndex]
+        if (!plot?.cropId || plot.plantedAt == null) return
+        const crop = CROPS[plot.cropId]
+        if (!crop) return
+        if (Date.now() - plot.plantedAt < crop.growMs) {
+          set({ toast: 'Still growing — no rush' })
+          return
+        }
+        const cropId = plot.cropId
+        const plots = s.plots.map((p, i) =>
+          i === plotIndex ? { cropId: null, plantedAt: null } : p,
+        )
+        const xpResult = applyXpGain(
+          s.xp,
+          crop.xp,
+          s.popupQueue,
+          s.unlocked,
+          s.activeOrders,
+        )
+        set({
+          plots,
+          inventory: addItem(s.inventory, cropId, crop.harvestQty),
+          xp: xpResult.xp,
+          popupQueue: xpResult.popupQueue,
+          unlocked: xpResult.unlocked,
+          activeOrders: xpResult.activeOrders,
+          toast: `Harvested ${crop.harvestQty}× ${crop.name}`,
+        })
+        get().track('harvest', cropId, crop.harvestQty)
+      },
+
+      unlockPlot: () => {
+        const s = get()
+        if (s.plots.length >= MAX_PLOTS) {
+          set({ toast: 'Farm is full for now' })
+          return
+        }
+        const cost = PLOT_UNLOCK_BASE * s.plots.length
+        if (s.coins < cost) {
+          set({ toast: `Need ${cost} coins` })
+          return
+        }
+        set({
+          coins: s.coins - cost,
+          plots: [...s.plots, { cropId: null, plantedAt: null }],
+          toast: 'New plot unlocked!',
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      startCraft: (recipeId) => {
+        const recipe = RECIPES.find((r) => r.id === recipeId)
+        if (!recipe) return
+        const s = get()
+        if (!s.unlocked.includes(recipe.buildingId)) {
+          set({ toast: 'Machine blueprint locked — check Missions' })
+          return
+        }
+        if (!s.ownedBuildings.includes(recipe.buildingId)) {
+          set({ toast: 'Purchase this machine first' })
+          return
+        }
+        const building = BUILDINGS[recipe.buildingId]
+        const queued = s.craftQueue.filter((j) => j.buildingId === recipe.buildingId)
+        const queueCap = machineQueueSize(recipe.buildingId, s.machineQueueBonus)
+        if (queued.length >= queueCap) {
+          set({ toast: `${building.name} queue full (${queueCap} slots)` })
+          return
+        }
+        if (!hasItems(s.inventory, recipe.inputs)) {
+          set({ toast: 'Missing ingredients' })
+          return
+        }
+        const now = Date.now()
+        set({
+          inventory: takeItems(s.inventory, recipe.inputs),
+          craftQueue: [
+            ...s.craftQueue,
+            {
+              recipeId,
+              buildingId: recipe.buildingId,
+              startedAt: now,
+              doneAt: now + recipe.craftMs,
+            },
+          ],
+          toast: `${building.name}: ${recipe.name}…`,
+        })
+      },
+
+      collectCraft: (index) => {
+        const s = get()
+        const job = s.craftQueue[index]
+        if (!job || Date.now() < job.doneAt) return
+        const recipe = RECIPES.find((r) => r.id === job.recipeId)
+        if (!recipe) return
+        const craftQueue = s.craftQueue.filter((_, i) => i !== index)
+        const xpResult = applyXpGain(
+          s.xp,
+          recipe.xp,
+          s.popupQueue,
+          s.unlocked,
+          s.activeOrders,
+        )
+        set({
+          craftQueue,
+          inventory: addItem(s.inventory, recipe.output, recipe.outputQty),
+          xp: xpResult.xp,
+          popupQueue: xpResult.popupQueue,
+          unlocked: xpResult.unlocked,
+          activeOrders: xpResult.activeOrders,
+          toast: `Collected ${recipe.name}`,
+        })
+        get().track('craft', recipe.output, recipe.outputQty)
+      },
+
+      purchaseBuilding: (id) => {
+        const building = BUILDINGS[id]
+        if (!building) return
+        const s = get()
+        if (!s.unlocked.includes(id)) {
+          set({ toast: 'Blueprint locked — finish missions first' })
+          return
+        }
+        if (s.ownedBuildings.includes(id)) {
+          set({ toast: `${building.name} already built` })
+          return
+        }
+        if (s.coins < building.buyCost) {
+          set({ toast: `Need ${building.buyCost} coins to build` })
+          return
+        }
+        set({
+          coins: s.coins - building.buyCost,
+          ownedBuildings: [...s.ownedBuildings, id],
+          selectedBuilding: id,
+          toast: `${building.name} built! Queue: ${BASE_MACHINE_QUEUE} slots`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      upgradeMachineQueue: (id) => {
+        const building = BUILDINGS[id]
+        if (!building) return
+        const s = get()
+        if (!s.ownedBuildings.includes(id)) {
+          set({ toast: 'Build the machine first' })
+          return
+        }
+        const bonus = s.machineQueueBonus[id] ?? 0
+        if (bonus >= MAX_QUEUE_BONUS) {
+          set({ toast: `${building.name} queue is maxed out` })
+          return
+        }
+        const cost = queueUpgradeCost(id, bonus)
+        if (s.coins < cost) {
+          set({ toast: `Need ${cost} coins for queue upgrade` })
+          return
+        }
+        const nextBonus = bonus + 1
+        set({
+          coins: s.coins - cost,
+          machineQueueBonus: { ...s.machineQueueBonus, [id]: nextBonus },
+          toast: `${building.name} queue → ${BASE_MACHINE_QUEUE + nextBonus} slots`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      buyAnimal: (typeId) => {
+        const def = ANIMALS[typeId]
+        if (!def) return
+        const s = get()
+        if (!s.unlocked.includes(def.buildingId)) {
+          set({ toast: `${def.name} building locked — check Missions` })
+          return
+        }
+        const owned = s.animals.filter((a) => a.typeId === typeId).length
+        if (owned >= def.maxOwned) {
+          set({ toast: `Max ${def.name}s owned` })
+          return
+        }
+        if (s.coins < def.buyCost) {
+          set({ toast: `Need ${def.buyCost} coins` })
+          return
+        }
+        const needsFeed = Boolean(def.feedItem)
+        const animal: AnimalInstance = {
+          id: uid(),
+          typeId,
+          startedAt: needsFeed ? null : Date.now(),
+        }
+        set({
+          coins: s.coins - def.buyCost,
+          animals: [...s.animals, animal],
+          toast: `Bought ${def.name}!`,
+        })
+        get().track('buy_animal', typeId, 1)
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      feedAnimal: (animalId) => {
+        const s = get()
+        const animal = s.animals.find((a) => a.id === animalId)
+        if (!animal || animal.startedAt != null) return
+        const def = ANIMALS[animal.typeId]
+        if (!def?.feedItem) {
+          set({
+            animals: s.animals.map((a) =>
+              a.id === animalId ? { ...a, startedAt: Date.now() } : a,
+            ),
+          })
+          return
+        }
+        const qty = def.feedQty ?? 1
+        if ((s.inventory[def.feedItem] ?? 0) < qty) {
+          set({ toast: `Need ${qty}× ${ITEM_META[def.feedItem].name}` })
+          return
+        }
+        set({
+          inventory: takeItems(s.inventory, { [def.feedItem]: qty }),
+          animals: s.animals.map((a) =>
+            a.id === animalId ? { ...a, startedAt: Date.now() } : a,
+          ),
+          toast: `Fed ${def.name}`,
+        })
+      },
+
+      collectAnimal: (animalId) => {
+        const s = get()
+        const animal = s.animals.find((a) => a.id === animalId)
+        if (!animal?.startedAt) return
+        const def = ANIMALS[animal.typeId]
+        if (!def) return
+        if (Date.now() - animal.startedAt < def.produceMs) {
+          set({ toast: 'Not ready yet' })
+          return
+        }
+        const needsFeed = Boolean(def.feedItem)
+        const xpResult = applyXpGain(
+          s.xp,
+          def.xp,
+          s.popupQueue,
+          s.unlocked,
+          s.activeOrders,
+        )
+        set({
+          inventory: addItem(s.inventory, def.product, def.productQty),
+          xp: xpResult.xp,
+          popupQueue: xpResult.popupQueue,
+          unlocked: xpResult.unlocked,
+          activeOrders: xpResult.activeOrders,
+          animals: s.animals.map((a) =>
+            a.id === animalId
+              ? { ...a, startedAt: needsFeed ? null : Date.now() }
+              : a,
+          ),
+          toast: `Collected ${def.productQty}× ${ITEM_META[def.product].name}`,
+        })
+        get().track('collect_animal', def.product, def.productQty)
+      },
+
+      fulfillOrder: (slot) => {
+        const s = get()
+        if (!s.unlocked.includes('orders_board')) {
+          set({ toast: `Orders unlock at Level ${ORDERS_UNLOCK_LEVEL}` })
+          return
+        }
+        const active = s.activeOrders.find((o) => o.slot === slot)
+        if (!active) return
+        const order = ORDERS.find((o) => o.id === active.orderId)
+        if (!order) return
+        if (!hasItems(s.inventory, order.needs)) {
+          set({ toast: 'Missing items for this order' })
+          return
+        }
+        const exclude = s.activeOrders
+          .filter((o) => o.slot !== slot)
+          .map((o) => o.orderId)
+        const level = levelFromXp(s.xp + order.rewardXp)
+        const replacement = pickOrders(level, [...exclude, order.id])[0]
+        const xpResult = applyXpGain(
+          s.xp,
+          order.rewardXp,
+          s.popupQueue,
+          s.unlocked,
+          s.activeOrders,
+        )
+        const activeOrdersAfter = xpResult.activeOrders.map((o) =>
+          o.slot === slot
+            ? { orderId: replacement?.orderId ?? order.id, slot }
+            : o,
+        )
+        set({
+          inventory: takeItems(s.inventory, order.needs),
+          coins: s.coins + order.rewardCoins,
+          xp: xpResult.xp,
+          popupQueue: xpResult.popupQueue,
+          unlocked: xpResult.unlocked,
+          activeOrders: activeOrdersAfter,
+          toast: `+${order.rewardCoins} coins · +${order.rewardXp} XP`,
+        })
+        get().track('fulfill_order', undefined, 1)
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      refreshOrders: () => {
+        if (!get().unlocked.includes('orders_board')) {
+          set({ toast: `Orders unlock at Level ${ORDERS_UNLOCK_LEVEL}` })
+          return
+        }
+        const level = levelFromXp(get().xp)
+        set({
+          activeOrders: pickOrders(level),
+          toast: 'Orders refreshed',
+        })
+      },
+
+      sellGoods: (id, qty = 1) => {
+        const amount = Math.max(1, Math.floor(qty))
+        const s = get()
+        const have = s.inventory[id] ?? 0
+        if (have < amount) {
+          set({ toast: 'Not enough to sell' })
+          return
+        }
+        const unit = itemSellPrice(id)
+        const total = unit * amount
+        set({
+          inventory: takeItems(s.inventory, { [id]: amount }),
+          coins: s.coins + total,
+          toast: `Sold ${amount}× ${ITEM_META[id].name} · 🪙 ${total}`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      sellSeeds: (id, qty = 1) => {
+        const amount = Math.max(1, Math.floor(qty))
+        const s = get()
+        const have = s.seeds[id] ?? 0
+        if (have < amount) {
+          set({ toast: 'Not enough seeds to sell' })
+          return
+        }
+        const unit = seedSellPrice(id)
+        const total = unit * amount
+        const crop = CROPS[id]
+        set({
+          seeds: takeSeeds(s.seeds, { [id]: amount }),
+          coins: s.coins + total,
+          toast: `Sold ${amount}× ${crop.name} seeds · 🪙 ${total}`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      sellMaterial: (id, qty = 1) => {
+        const amount = Math.max(1, Math.floor(qty))
+        const s = get()
+        const have = s.materials[id] ?? 0
+        if (have < amount) {
+          set({ toast: 'Not enough to sell' })
+          return
+        }
+        const unit = materialSellPrice(id)
+        const total = unit * amount
+        set({
+          materials: takeMaterial(s.materials, { [id]: amount }),
+          coins: s.coins + total,
+          toast: `Sold ${amount}× ${MATERIAL_META[id].name} · 🪙 ${total}`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      claimMission: () => {
+        const s = get()
+        const id = s.activeMissionId
+        if (!id) return
+        const mission = MISSION_BY_ID[id]
+        if (!mission) return
+        const done = mission.goals.every(
+          (g) => (s.missionProgress[goalKey(id, g.id)] ?? 0) >= g.amount,
+        )
+        if (!done) {
+          set({ toast: 'Finish all mission goals first' })
+          return
+        }
+        const unlocked = [...new Set([...s.unlocked, ...mission.unlocks])]
+        const freshUnlocks = newUnlocks(s.unlocked, unlocked)
+        const completedMissions = [...s.completedMissions, id]
+        const next = MISSIONS.find(
+          (m) =>
+            !completedMissions.includes(m.id) &&
+            (!m.requires || completedMissions.includes(m.requires)),
+        )
+        const xpResult = applyXpGain(
+          s.xp,
+          mission.rewardXp,
+          s.popupQueue,
+          unlocked,
+          s.activeOrders,
+        )
+        const animalUnlock = freshUnlocks.find(
+          (u) => u in ANIMAL_BUILDINGS,
+        ) as AnimalBuildingId | undefined
+        const blueprintUnlock = mission.unlocks.find(
+          (u) => u in BUILDINGS,
+        ) as BuildingId | undefined
+        set({
+          coins: s.coins + mission.rewardCoins,
+          xp: xpResult.xp,
+          inventory: addItems(s.inventory, mission.rewardItems),
+          unlocked: xpResult.unlocked,
+          completedMissions,
+          activeMissionId: next?.id ?? null,
+          missionProgress: next ? emptyProgress(next.goals, next.id) : {},
+          activeOrders: xpResult.activeOrders,
+          popupQueue: enqueuePopups(
+            xpResult.popupQueue,
+            unlockPopup(freshUnlocks, 'Mission complete'),
+          ),
+          selectedBuilding:
+            blueprintUnlock ?? s.selectedBuilding,
+          selectedAnimalBuilding:
+            animalUnlock ?? s.selectedAnimalBuilding,
+          toast: `Mission complete! +${mission.rewardCoins} coins`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      startEvent: (eventId) => {
+        const event = EVENT_BY_ID[eventId]
+        if (!event) return
+        const s = get()
+        if (s.activeEventId) {
+          set({ toast: 'Finish or wait out the current event' })
+          return
+        }
+        set({
+          activeEventId: eventId,
+          eventEndsAt: Date.now() + event.durationMs,
+          eventProgress: emptyProgress(event.goals, eventId),
+          toast: `${event.name} started!`,
+        })
+      },
+
+      claimEvent: () => {
+        const s = get()
+        const id = s.activeEventId
+        if (!id) return
+        const event = EVENT_BY_ID[id]
+        if (!event) return
+        if (s.eventEndsAt && Date.now() > s.eventEndsAt) {
+          set({
+            activeEventId: null,
+            eventEndsAt: null,
+            eventProgress: {},
+            toast: 'Event expired',
+          })
+          return
+        }
+        const done = event.goals.every(
+          (g) => (s.eventProgress[goalKey(id, g.id)] ?? 0) >= g.amount,
+        )
+        if (!done) {
+          set({ toast: 'Finish all event goals first' })
+          return
+        }
+        const unlocked = [
+          ...new Set([...s.unlocked, ...(event.unlocks ?? [])]),
+        ]
+        const freshUnlocks = newUnlocks(s.unlocked, unlocked)
+        const xpResult = applyXpGain(
+          s.xp,
+          event.rewardXp,
+          s.popupQueue,
+          unlocked,
+          s.activeOrders,
+        )
+        set({
+          coins: s.coins + event.rewardCoins,
+          xp: xpResult.xp,
+          inventory: addItems(s.inventory, event.rewardItems),
+          unlocked: xpResult.unlocked,
+          activeOrders: xpResult.activeOrders,
+          completedEvents: [...s.completedEvents, id],
+          activeEventId: null,
+          eventEndsAt: null,
+          eventProgress: {},
+          popupQueue: enqueuePopups(
+            xpResult.popupQueue,
+            unlockPopup(freshUnlocks, 'Event reward'),
+          ),
+          toast: `Event complete! +${event.rewardCoins} coins`,
+        })
+      },
+
+      recruitNpc: (npcId) => {
+        const def = NPCS[npcId]
+        if (!def) return
+        const s = get()
+        if (!s.unlocked.includes('tavern')) {
+          set({ toast: `Tavern unlocks at Level ${TAVERN_UNLOCK_LEVEL}` })
+          return
+        }
+        if (s.recruitedNpcs.length >= MAX_RECRUITED_NPCS) {
+          set({ toast: `Tavern full (${MAX_RECRUITED_NPCS} recruits max)` })
+          return
+        }
+        if (s.recruitedNpcs.some((n) => n.npcId === npcId)) {
+          set({ toast: `${def.name} is already on your roster` })
+          return
+        }
+        if (s.coins < def.hireCost) {
+          set({ toast: `Need ${def.hireCost} coins to recruit ${def.name}` })
+          return
+        }
+        const recruit: RecruitedNpc = { id: uid(), npcId }
+        set({
+          coins: s.coins - def.hireCost,
+          recruitedNpcs: [...s.recruitedNpcs, recruit],
+          toast: `${def.name} joined your party!`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      startAdventure: (adventureId, npcInstanceIds) => {
+        const adventure = ADVENTURE_BY_ID[adventureId]
+        if (!adventure) return
+        const s = get()
+        if (!s.unlocked.includes('adventure_land')) {
+          set({ toast: `Adventure Land unlocks at Level ${TAVERN_UNLOCK_LEVEL}` })
+          return
+        }
+        const level = levelFromXp(s.xp)
+        if (level < adventure.unlockLevel) {
+          set({ toast: `Reach Level ${adventure.unlockLevel} for this expedition` })
+          return
+        }
+        if (
+          npcInstanceIds.length < adventure.minNpcs ||
+          npcInstanceIds.length > adventure.maxNpcs
+        ) {
+          set({
+            toast: `Pick ${adventure.minNpcs}–${adventure.maxNpcs} adventurers`,
+          })
+          return
+        }
+        const busy = busyNpcIds(s.activeAdventures)
+        if (npcInstanceIds.some((id) => busy.has(id))) {
+          set({ toast: 'Some adventurers are already exploring' })
+          return
+        }
+        const rosterIds = new Set(s.recruitedNpcs.map((n) => n.id))
+        if (!npcInstanceIds.every((id) => rosterIds.has(id))) {
+          set({ toast: 'Invalid party selection' })
+          return
+        }
+        const skill = partySkill(npcInstanceIds, s.recruitedNpcs, s.gearInventory)
+        if (skill < adventure.minSkill) {
+          set({
+            toast: `Party skill too low (need ${adventure.minSkill}, have ${skill})`,
+          })
+          return
+        }
+        const now = Date.now()
+        const job: ActiveAdventure = {
+          id: uid(),
+          adventureId,
+          npcInstanceIds,
+          startedAt: now,
+          doneAt: now + adventure.durationMs,
+        }
+        set({
+          activeAdventures: [...s.activeAdventures, job],
+          toast: `${adventure.name} expedition started!`,
+        })
+      },
+
+      collectAdventure: (jobId) => {
+        const s = get()
+        const job = s.activeAdventures.find((a) => a.id === jobId)
+        if (!job || Date.now() < job.doneAt) return
+        const adventure = ADVENTURE_BY_ID[job.adventureId]
+        if (!adventure) return
+        const xpResult = applyXpGain(
+          s.xp,
+          adventure.rewardXp,
+          s.popupQueue,
+          s.unlocked,
+          s.activeOrders,
+        )
+        set({
+          activeAdventures: s.activeAdventures.filter((a) => a.id !== jobId),
+          coins: s.coins + adventure.rewardCoins,
+          xp: xpResult.xp,
+          popupQueue: xpResult.popupQueue,
+          unlocked: xpResult.unlocked,
+          activeOrders: xpResult.activeOrders,
+          inventory: addItems(s.inventory, adventure.rewardItems),
+          materials: addMaterials(s.materials, adventure.rewardMaterials),
+          toast: `${adventure.name} complete! +${adventure.rewardCoins} coins`,
+        })
+      },
+
+      startGearCraft: (blueprintId) => {
+        const blueprint = GEAR_BLUEPRINT_BY_ID[blueprintId]
+        if (!blueprint) return
+        const s = get()
+        if (!s.unlocked.includes(blueprint.buildingId)) {
+          set({ toast: 'Workshop locked — reach Level 15' })
+          return
+        }
+        const level = levelFromXp(s.xp)
+        if (level < blueprint.unlockLevel) {
+          set({ toast: `Reach Level ${blueprint.unlockLevel} for this blueprint` })
+          return
+        }
+        const building = GEAR_BUILDINGS[blueprint.buildingId]
+        const queued = s.gearCraftQueue.filter(
+          (j) => j.buildingId === blueprint.buildingId,
+        )
+        if (queued.length >= building.queueSize) {
+          set({ toast: `${building.name} queue full` })
+          return
+        }
+        if (!hasResources(s.inventory, s.materials, blueprint.inputs)) {
+          set({ toast: 'Missing materials or goods' })
+          return
+        }
+        const taken = takeResources(s.inventory, s.materials, blueprint.inputs)
+        const now = Date.now()
+        set({
+          inventory: taken.inventory,
+          materials: taken.materials,
+          gearCraftQueue: [
+            ...s.gearCraftQueue,
+            {
+              blueprintId,
+              buildingId: blueprint.buildingId,
+              startedAt: now,
+              doneAt: now + blueprint.craftMs,
+            },
+          ],
+          toast: `${building.name}: ${blueprint.name}…`,
+        })
+      },
+
+      collectGearCraft: (index) => {
+        const s = get()
+        const job = s.gearCraftQueue[index]
+        if (!job || Date.now() < job.doneAt) return
+        const blueprint = GEAR_BLUEPRINT_BY_ID[job.blueprintId]
+        if (!blueprint) return
+        const gear: GearInstance = {
+          id: uid(),
+          blueprintId: job.blueprintId,
+          equippedBy: null,
+        }
+        const xpResult = applyXpGain(
+          s.xp,
+          blueprint.xp,
+          s.popupQueue,
+          s.unlocked,
+          s.activeOrders,
+        )
+        set({
+          gearCraftQueue: s.gearCraftQueue.filter((_, i) => i !== index),
+          gearInventory: [...s.gearInventory, gear],
+          xp: xpResult.xp,
+          popupQueue: xpResult.popupQueue,
+          unlocked: xpResult.unlocked,
+          activeOrders: xpResult.activeOrders,
+          toast: `Crafted ${blueprint.name}!`,
+        })
+      },
+
+      equipGear: (gearInstanceId, npcInstanceId) => {
+        const s = get()
+        const gear = s.gearInventory.find((g) => g.id === gearInstanceId)
+        const npc = s.recruitedNpcs.find((n) => n.id === npcInstanceId)
+        if (!gear || !npc) return
+        if (busyNpcIds(s.activeAdventures).has(npcInstanceId)) {
+          set({ toast: 'Cannot change gear while exploring' })
+          return
+        }
+        const blueprint = GEAR_BLUEPRINT_BY_ID[gear.blueprintId]
+        if (!blueprint) return
+        if (gear.equippedBy && gear.equippedBy !== npcInstanceId) {
+          set({ toast: 'Unequip from other recruit first' })
+          return
+        }
+        const slot = blueprint.slot
+        set({
+          gearInventory: s.gearInventory.map((g) => {
+            if (g.id === gearInstanceId) return { ...g, equippedBy: npcInstanceId }
+            if (
+              g.equippedBy === npcInstanceId &&
+              GEAR_BLUEPRINT_BY_ID[g.blueprintId]?.slot === slot
+            ) {
+              return { ...g, equippedBy: null }
+            }
+            return g
+          }),
+          toast: `Equipped ${blueprint.name} on ${NPCS[npc.npcId]?.name ?? 'recruit'}`,
+        })
+      },
+
+      unequipGear: (gearInstanceId) => {
+        const s = get()
+        const gear = s.gearInventory.find((g) => g.id === gearInstanceId)
+        if (!gear?.equippedBy) return
+        if (busyNpcIds(s.activeAdventures).has(gear.equippedBy)) {
+          set({ toast: 'Cannot change gear while exploring' })
+          return
+        }
+        set({
+          gearInventory: s.gearInventory.map((g) =>
+            g.id === gearInstanceId ? { ...g, equippedBy: null } : g,
+          ),
+          toast: 'Gear unequipped',
+        })
+      },
+
+      resetGame: () => set({ ...initial() }),
+    }),
+    {
+      name: 'cozy-valley-save-v6',
+      version: 6,
+      migrate: (persisted: unknown, version: number) => {
+        const state = persisted as Record<string, unknown>
+        if (version < 3) {
+          if (Array.isArray(state.unlocked)) {
+            state.unlocked = migrateUnlocked(state.unlocked as string[])
+          }
+          if (state.inventory && typeof state.inventory === 'object') {
+            state.inventory = migrateInventory(
+              state.inventory as Partial<Record<string, number>>,
+            )
+          }
+        }
+        if (typeof state.xp === 'number' && Array.isArray(state.unlocked)) {
+          state.unlocked = syncLevelUnlocks(
+            state.xp,
+            state.unlocked as UnlockId[],
+          )
+        }
+        if (!Array.isArray(state.recruitedNpcs)) state.recruitedNpcs = []
+        if (!Array.isArray(state.activeAdventures)) state.activeAdventures = []
+        if (!state.materials || typeof state.materials !== 'object') {
+          state.materials = {}
+        }
+        if (!Array.isArray(state.gearInventory)) state.gearInventory = []
+        if (!Array.isArray(state.gearCraftQueue)) state.gearCraftQueue = []
+        const pane = state.adventurePane
+        if (pane !== 'tavern' && pane !== 'lands' && pane !== 'workshop') {
+          state.adventurePane = 'tavern'
+        }
+        if (version < 6) {
+          const unlocked = (state.unlocked as UnlockId[] | undefined) ?? []
+          const owned = new Set([
+            ...((state.ownedBuildings as BuildingId[] | undefined) ?? []),
+            ...unlocked.filter((u) => u in BUILDINGS),
+          ])
+          state.ownedBuildings = [...owned] as BuildingId[]
+          if (!state.machineQueueBonus || typeof state.machineQueueBonus !== 'object') {
+            state.machineQueueBonus = {}
+          }
+          const xp = typeof state.xp === 'number' ? state.xp : 0
+          if (
+            (state.unlocked as UnlockId[])?.includes('orders_board') &&
+            (!Array.isArray(state.activeOrders) ||
+              (state.activeOrders as ActiveOrder[]).length === 0)
+          ) {
+            state.activeOrders = pickOrders(levelFromXp(xp))
+          }
+        }
+        return state
+      },
+      partialize: (s) => ({
+        coins: s.coins,
+        xp: s.xp,
+        seeds: s.seeds,
+        inventory: s.inventory,
+        materials: s.materials,
+        plots: s.plots,
+        selectedCrop: s.selectedCrop,
+        craftQueue: s.craftQueue,
+        activeOrders: s.activeOrders,
+        animals: s.animals,
+        unlocked: s.unlocked,
+        ownedBuildings: s.ownedBuildings,
+        machineQueueBonus: s.machineQueueBonus,
+        completedMissions: s.completedMissions,
+        activeMissionId: s.activeMissionId,
+        missionProgress: s.missionProgress,
+        activeEventId: s.activeEventId,
+        eventEndsAt: s.eventEndsAt,
+        eventProgress: s.eventProgress,
+        completedEvents: s.completedEvents,
+        selectedBuilding: s.selectedBuilding,
+        selectedAnimalBuilding: s.selectedAnimalBuilding,
+        selectedGearBuilding: s.selectedGearBuilding,
+        adventurePane: s.adventurePane,
+        recruitedNpcs: s.recruitedNpcs,
+        activeAdventures: s.activeAdventures,
+        gearInventory: s.gearInventory,
+        gearCraftQueue: s.gearCraftQueue,
+      }),
+    },
+  ),
+)
+
+export function adventureProgress(
+  job: ActiveAdventure,
+  now = Date.now(),
+): number {
+  const span = job.doneAt - job.startedAt
+  if (span <= 0) return 1
+  return Math.min(1, (now - job.startedAt) / span)
+}
+
+export function adventureReady(job: ActiveAdventure, now = Date.now()): boolean {
+  return adventureProgress(job, now) >= 1
+}
+
+export function idleRecruits(
+  recruited: RecruitedNpc[],
+  activeAdventures: ActiveAdventure[],
+): RecruitedNpc[] {
+  const busy = busyNpcIds(activeAdventures)
+  return recruited.filter((n) => !busy.has(n.id))
+}
+
+export function plotProgress(plot: PlotState, now = Date.now()): number {
+  if (!plot.cropId || plot.plantedAt == null) return 0
+  const crop = CROPS[plot.cropId]
+  if (!crop) return 0
+  return Math.min(1, (now - plot.plantedAt) / crop.growMs)
+}
+
+export function isReady(plot: PlotState, now = Date.now()): boolean {
+  return plotProgress(plot, now) >= 1
+}
+
+export function animalProgress(
+  animal: AnimalInstance,
+  now = Date.now(),
+): number {
+  if (animal.startedAt == null) return 0
+  const def = ANIMALS[animal.typeId]
+  if (!def) return 0
+  return Math.min(1, (now - animal.startedAt) / def.produceMs)
+}
+
+export function animalReady(animal: AnimalInstance, now = Date.now()): boolean {
+  return animalProgress(animal, now) >= 1
+}
+
+export function plotUnlockCost(plotCount: number): number {
+  return PLOT_UNLOCK_BASE * plotCount
+}
+
+export function missionGoalProgress(
+  progress: Record<string, number>,
+  parentId: string,
+  goalId: string,
+): number {
+  return progress[`${parentId}:${goalId}`] ?? 0
+}
+
+export { MAX_PLOTS, EVENTS, BUILDINGS, TAVERN_UNLOCK_LEVEL, ORDERS_UNLOCK_LEVEL, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS }
