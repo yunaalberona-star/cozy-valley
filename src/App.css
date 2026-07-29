@@ -87,6 +87,26 @@ html.theme-dark .guide-pulse-frame::after {
   box-shadow: 0 0 12px rgba(240, 184, 64, 0.5);
 }
 
+html.theme-dark .popup-backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+html.theme-dark .popup-card {
+  background: linear-gradient(165deg, #243824 0%, #1a2818 100%);
+  border-color: rgba(143, 191, 122, 0.4);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+
+html.theme-dark .popup-card.kind-level_up {
+  background: linear-gradient(165deg, #2d3820 0%, #1f2e1a 100%);
+  border-color: rgba(232, 184, 74, 0.45);
+}
+
+html.theme-dark .popup-items li {
+  background: rgba(0, 0, 0, 0.28);
+  color: #e8efe4;
+}
+
 *,
 *::before,
 *::after {
@@ -985,7 +1005,7 @@ button {
   bottom: 88px;
   transform: translateX(-50%);
   z-index: 20;
-  background: var(--ink);
+  background: #1e2a1c;
   color: #f4faf0;
   padding: 10px 16px;
   border-radius: 999px;
@@ -995,6 +1015,12 @@ button {
   animation: rise 0.25s ease both;
   max-width: min(90vw, 360px);
   text-align: center;
+}
+
+html.theme-dark .toast {
+  background: #1a2418;
+  color: #e8efe4;
+  border: 1px solid rgba(143, 191, 122, 0.35);
 }
 
 @media (min-width: 720px) {
