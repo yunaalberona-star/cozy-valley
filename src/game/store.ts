@@ -493,9 +493,8 @@ function computeMissionProgressFromState(
       case 'harvest':
       case 'craft':
       case 'collect_animal':
-        if (g.target) {
-          next[key] = Math.min(g.amount, s.inventory[g.target as ItemId] ?? 0)
-        }
+        // Lifetime progress from player actions only — not bag inventory (market buys don't count).
+        next[key] = Math.min(g.amount, next[key] ?? 0)
         break
       case 'buy_animal':
         if (g.target) {
@@ -1138,14 +1137,14 @@ export const useGame = create<GameState>()(
 
         if (s.activeMissionId) {
           const mission = MISSION_BY_ID[s.activeMissionId]
-          if (mission && kind === 'fulfill_order') {
+          if (mission) {
             missionProgress = bumpGoals(
               missionProgress,
               mission.goals,
               s.activeMissionId,
               kind,
               target,
-              amount,
+              kind === 'own_coins' ? s.coins : amount,
             )
           }
         }
@@ -1167,7 +1166,7 @@ export const useGame = create<GameState>()(
 
         const missionPatch = resolveMissionProgress(
           { ...s, missionProgress },
-          kind === 'fulfill_order' ? missionProgress : undefined,
+          missionProgress,
         )
 
         if (

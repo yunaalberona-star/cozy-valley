@@ -360,3 +360,101 @@ export async function fetchListingById(id: string): Promise<MarketListing | null
   if (error) throw wrapError(error)
   return (data as MarketListing | null) ?? null
 }
+
+export interface ChatMessage {
+  id: string
+  player_id: string
+  player_name: string
+  body: string
+  created_at: string
+}
+
+const CHAT_MAX_LEN = 280
+const CHAT_FETCH_LIMIT = 80
+const CHAT_POLL_MS = 15_000
+
+export async function fetchRecentChat(): Promise<ChatMessage[]> {
+  const supabase = getClient()
+  const { data, error } = await supabase
+    .from('market_chat')
+    .select('*')
+    .order('created_at', { ascending: true })
+    .limit(CHAT_FETCH_LIMIT)
+
+  if (error) throw wrapError(error)
+  return (data ?? []) as ChatMessage[]
+}
+
+export async function sendChatMessage(
+  playerId: string,
+  playerName: string,
+  body: string,
+): Promise<void> {
+  const text = body.trim()
+  if (!text) {
+    throw new MarketError('Message cannot be empty.')
+  }
+  if (text.length > CHAT_MAX_LEN) {
+    throw new MarketError(`Message must be ${CHAT_MAX_LEN} characters or less.`)
+  }
+
+  const supabase = getClient()
+  const { error } = await supabase.from('market_chat').insert({
+    player_id: playerId,
+    player_name: playerName,
+    body: text,
+  })
+
+  if (error) throw wrapError(error)
+}
+
+export function subscribeToChat(
+  callback: (messages: ChatMessage[]) => void,
+  onError?: (err: MarketError) => void,
+): () => void {
+  if (!isSupabaseConfigured()) return () => {}
+
+  let channel: RealtimeChannel | null = null
+  let pollId: ReturnType<typeof setInterval> | null = null
+  let stopped = false
+
+  const refresh = () => {
+    fetchRecentChat()
+      .then((messages) => {
+        if (!stopped) callback(messages)
+      })
+      .catch((err) => {
+        if (!stopped) onError?.(wrapError(err))
+      })
+  }
+
+  refresh()
+
+  try {
+    const supabase = getClient()
+    channel = supabase
+      .channel('market_chat_changes')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'market_chat' },
+        () => refresh(),
+      )
+      .subscribe()
+  } catch {
+    // Realtime unavailable — polling only
+  }
+
+  pollId = setInterval(refresh, CHAT_POLL_MS)
+
+  return () => {
+    stopped = true
+    if (pollId != null) clearInterval(pollId)
+    if (channel) {
+      try {
+        getClient().removeChannel(channel)
+      } catch {
+        // ignore
+      }
+    }
+  }
+}

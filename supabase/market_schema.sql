@@ -51,3 +51,25 @@ create policy "market_payouts_insert" on market_payouts
 
 create policy "market_payouts_update" on market_payouts
   for update using (true);
+
+-- Farmer chat (same Supabase project as the market)
+create table if not exists market_chat (
+  id uuid primary key default gen_random_uuid(),
+  player_id text not null,
+  player_name text not null,
+  body text not null check (char_length(body) between 1 and 280),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists market_chat_created_idx
+  on market_chat (created_at desc);
+
+alter table market_chat enable row level security;
+
+drop policy if exists "market_chat_select" on market_chat;
+create policy "market_chat_select" on market_chat
+  for select using (true);
+
+drop policy if exists "market_chat_insert" on market_chat;
+create policy "market_chat_insert" on market_chat
+  for insert with check (true);

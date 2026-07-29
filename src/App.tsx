@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ANIMALS } from './game/data/animals'
 import { ANIMAL_BUILDINGS } from './game/data/animalBuildings'
 import {
@@ -58,8 +58,11 @@ import {
   getPlayerId,
   getPlayerName,
   isSupabaseConfigured,
+  sendChatMessage,
   setPlayerName,
+  subscribeToChat,
   subscribeToListings,
+  type ChatMessage,
   type MarketListing,
 } from './game/marketClient'
 import { unlockLabel } from './game/unlocks'
@@ -1226,6 +1229,87 @@ function MarketNameModal({
   )
 }
 
+function MarketChatPanel() {
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [draft, setDraft] = useState('')
+  const [chatError, setChatError] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const playerId = getPlayerId()
+  const playerName = getPlayerName() ?? 'Farmer'
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return
+    setChatError(null)
+    return subscribeToChat(setMessages, (err) => setChatError(err.message))
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [messages.length])
+
+  const handleSend = async () => {
+    const text = draft.trim()
+    if (!text || sending) return
+    setSending(true)
+    try {
+      await sendChatMessage(playerId, playerName, text)
+      setDraft('')
+      setChatError(null)
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : 'Could not send message')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <section className="market-chat">
+      <h3 className="section-label">Farmer chat</h3>
+      <p className="muted">Talk with other testers while you trade.</p>
+      {chatError && (
+        <p className="market-error" role="alert">
+          {chatError}
+        </p>
+      )}
+      <div ref={scrollRef} className="market-chat-log" aria-live="polite">
+        {messages.length === 0 && (
+          <p className="muted">No messages yet — say hello!</p>
+        )}
+        {messages.map((msg) => (
+          <div
+            key={msg.id}
+            className={`market-chat-row ${msg.player_id === playerId ? 'mine' : ''}`}
+          >
+            <strong>{msg.player_name}</strong>
+            <span>{msg.body}</span>
+          </div>
+        ))}
+      </div>
+      <form
+        className="market-chat-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void handleSend()
+        }}
+      >
+        <input
+          className="market-input"
+          type="text"
+          maxLength={280}
+          placeholder="Type a message…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button type="submit" className="btn" disabled={sending || !draft.trim()}>
+          Send
+        </button>
+      </form>
+    </section>
+  )
+}
+
 function MarketView() {
   const inventory = useGame((s) => s.inventory)
   const seeds = useGame((s) => s.seeds)
@@ -1495,6 +1579,8 @@ function MarketView() {
           )
         })}
       </div>
+
+      <MarketChatPanel />
     </div>
   )
 }
