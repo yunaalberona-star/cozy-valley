@@ -15,6 +15,7 @@ import {
   queueUpgradeCost,
 } from './game/data/buildings'
 import { CROPS, SORTED_CROP_LIST, xpProgress } from './game/data/crops'
+import { collectMachineIngredients } from './game/data/itemSources'
 import {
   ADVENTURES,
   adventuresForLevel,
@@ -522,6 +523,91 @@ function FarmView() {
   )
 }
 
+function IngredientBar({
+  items,
+  inventory,
+  onNeedItem,
+}: {
+  items: { id: ItemId; qty: number }[]
+  inventory: Partial<Record<ItemId, number>>
+  onNeedItem: (id: ItemId, qty: number) => void
+}) {
+  if (items.length === 0) return null
+
+  const sorted = [...items].sort((a, b) => {
+    const aOk = (inventory[a.id] ?? 0) >= a.qty
+    const bOk = (inventory[b.id] ?? 0) >= b.qty
+    if (aOk === bOk) return a.id.localeCompare(b.id)
+    return aOk ? 1 : -1
+  })
+
+  return (
+    <div className="ingredient-bar">
+      <p className="ingredient-bar-label">Required items</p>
+      <div className="ingredient-chips" role="list">
+        {sorted.map(({ id, qty }) => {
+          const meta = ITEM_META[id]
+          const have = inventory[id] ?? 0
+          const ok = have >= qty
+          return (
+            <button
+              key={id}
+              type="button"
+              role="listitem"
+              className={`ingredient-chip ${ok ? 'ok' : 'need'}`}
+              disabled={ok}
+              onClick={() => onNeedItem(id, qty)}
+              title={
+                ok
+                  ? `${meta.name}: ${have}/${qty} ready`
+                  : `${meta.name}: need ${qty} (have ${have}) — tap to find`
+              }
+            >
+              <span>{meta.emoji}</span>
+              <span className="ingredient-chip-meta">
+                {meta.name} · {have}/{qty}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function NeedItem({
+  id,
+  qty,
+  have,
+  onNeed,
+}: {
+  id: ItemId
+  qty: number
+  have: number
+  onNeed: (id: ItemId, qty: number) => void
+}) {
+  const meta = ITEM_META[id]
+  const ok = have >= qty
+  if (ok) {
+    return (
+      <li className="ok">
+        {meta?.emoji} {qty} {meta?.name} <span>({have})</span>
+      </li>
+    )
+  }
+  return (
+    <li className="no">
+      <button
+        type="button"
+        className="need-item-btn"
+        onClick={() => onNeed(id, qty)}
+      >
+        {meta?.emoji} {qty} {meta?.name} <span>({have})</span>
+      </button>
+    </li>
+  )
+}
+
 function MachinesView() {
   const now = useNow()
   const xp = useGame((s) => s.xp)
@@ -540,6 +626,7 @@ function MachinesView() {
   const machineQueueCapacity = useGame((s) => s.machineQueueCapacity)
   const startCraft = useGame((s) => s.startCraft)
   const collectCraft = useGame((s) => s.collectCraft)
+  const navigateToItem = useGame((s) => s.navigateToItem)
 
   const open =
     selectedBuilding && unlocked.includes(selectedBuilding)
@@ -553,6 +640,11 @@ function MachinesView() {
   const queue = craftQueue
     .map((job, index) => ({ job, index }))
     .filter(({ job }) => job.buildingId === open)
+  const machineIngredients = collectMachineIngredients(
+    recipes,
+    level,
+    isRecipeUnlocked,
+  )
 
   return (
     <div className="panel">
@@ -664,6 +756,12 @@ function MachinesView() {
             </button>
           )}
 
+          <IngredientBar
+            items={machineIngredients}
+            inventory={inventory}
+            onNeedItem={navigateToItem}
+          />
+
           {queue.length > 0 && (
             <div className="queue">
               {queue.map(({ job, index }) => {
@@ -735,17 +833,15 @@ function MachinesView() {
                   {!recipeLocked && (
                     <>
                       <ul className="need-list">
-                        {Object.entries(recipe.inputs).map(([id, qty]) => {
-                          const meta = ITEM_META[id as ItemId]
-                          const have = inventory[id as ItemId] ?? 0
-                          const ok = have >= (qty ?? 0)
-                          return (
-                            <li key={id} className={ok ? 'ok' : 'no'}>
-                              {meta?.emoji} {qty} {meta?.name}{' '}
-                              <span>({have})</span>
-                            </li>
-                          )
-                        })}
+                        {Object.entries(recipe.inputs).map(([id, qty]) => (
+                          <NeedItem
+                            key={id}
+                            id={id as ItemId}
+                            qty={qty ?? 0}
+                            have={inventory[id as ItemId] ?? 0}
+                            onNeed={navigateToItem}
+                          />
+                        ))}
                       </ul>
                       <button
                         type="button"
@@ -779,6 +875,7 @@ function AnimalsView() {
   const buyAnimal = useGame((s) => s.buyAnimal)
   const feedAnimal = useGame((s) => s.feedAnimal)
   const collectAnimal = useGame((s) => s.collectAnimal)
+  const navigateToItem = useGame((s) => s.navigateToItem)
 
   const open =
     selectedAnimalBuilding && unlocked.includes(selectedAnimalBuilding)
@@ -842,6 +939,14 @@ function AnimalsView() {
             <p>{building.blurb}</p>
           </div>
 
+          {def.feedItem && (
+            <IngredientBar
+              items={[{ id: def.feedItem, qty: def.feedQty ?? 1 }]}
+              inventory={inventory}
+              onNeedItem={navigateToItem}
+            />
+          )}
+
           <div className="recipe-card">
             <div className="recipe-top">
               <span className="big-emoji">{def.emoji}</span>
@@ -898,7 +1003,15 @@ function AnimalsView() {
                     <button
                       type="button"
                       className="btn tiny"
-                      onClick={() => feedAnimal(a.id)}
+                      onClick={() => {
+                        const need = def.feedQty ?? 1
+                        const have = inventory[def.feedItem!] ?? 0
+                        if (have < need) {
+                          navigateToItem(def.feedItem!, need)
+                        } else {
+                          feedAnimal(a.id)
+                        }
+                      }}
                       title={
                         feedMeta
                           ? `Needs ${def.feedQty ?? 1}× ${feedMeta.name}`
@@ -1333,6 +1446,18 @@ function ShopView() {
   const buySeed = useGame((s) => s.buySeed)
   const isCropAvailable = useGame((s) => s.isCropAvailable)
   const guideItemHighlights = useGame((s) => s.guideItemHighlights)
+  const shopScrollTarget = useGame((s) => s.shopScrollTarget)
+  const clearShopScrollTarget = useGame((s) => s.clearShopScrollTarget)
+
+  useEffect(() => {
+    if (!shopScrollTarget) return
+    const frame = requestAnimationFrame(() => {
+      const el = document.getElementById(`shop-seed-${shopScrollTarget}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      clearShopScrollTarget()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [shopScrollTarget, clearShopScrollTarget])
 
   return (
     <div className="panel">
@@ -1346,7 +1471,8 @@ function ShopView() {
           return (
             <div
               key={crop.id}
-              className={`recipe-card ${locked ? 'locked' : ''} ${!locked && guideItemHighlights.includes(crop.id) ? 'guide-pulse-frame' : ''}`}
+              id={`shop-seed-${crop.id}`}
+              className={`recipe-card ${locked ? 'locked' : ''} ${!locked && (guideItemHighlights.includes(crop.id) || shopScrollTarget === crop.id) ? 'guide-pulse-frame' : ''}`}
             >
               <div className="recipe-top">
                 <span className="big-emoji">{crop.emoji}</span>

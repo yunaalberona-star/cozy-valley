@@ -772,6 +772,95 @@ button {
   opacity: 0.7;
 }
 
+.need-item-btn {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 800;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.need-item-btn:hover {
+  opacity: 0.85;
+}
+
+.ingredient-bar {
+  margin-bottom: 14px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(143, 191, 122, 0.35);
+}
+
+.ingredient-bar-label {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.ingredient-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ingredient-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(143, 191, 122, 0.45);
+  background: rgba(255, 255, 255, 0.85);
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.ingredient-chip.ok {
+  opacity: 0.72;
+  cursor: default;
+}
+
+.ingredient-chip.need {
+  border-color: rgba(200, 80, 60, 0.55);
+  background: rgba(255, 245, 242, 0.95);
+  cursor: pointer;
+  animation: guide-pulse 1.6s ease-in-out infinite;
+}
+
+.ingredient-chip.need:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.ingredient-chip-meta {
+  white-space: nowrap;
+}
+
+html.theme-dark .ingredient-bar {
+  background: rgba(0, 0, 0, 0.22);
+  border-color: rgba(143, 191, 122, 0.25);
+}
+
+html.theme-dark .ingredient-chip {
+  background: rgba(0, 0, 0, 0.28);
+  color: #e8efe4;
+}
+
+html.theme-dark .ingredient-chip.need {
+  background: rgba(60, 28, 24, 0.65);
+}
+
 .queue {
   display: flex;
   flex-direction: column;

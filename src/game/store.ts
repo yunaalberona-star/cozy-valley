@@ -5,6 +5,12 @@ import { ANIMAL_BUILDINGS } from './data/animalBuildings'
 import { ADVENTURE_BY_ID, TAVERN_UNLOCK_LEVEL } from './data/adventures'
 import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
 import { CROPS, CROP_LIST, levelFromXp } from './data/crops'
+import {
+  animalBuildingForProduct,
+  isCropItem,
+  machineBuildingForItem,
+  recipeProducing,
+} from './data/itemSources'
 import { recipeUnlockLevel } from './data/unlockOrder'
 import {
   GEAR_BLUEPRINT_BY_ID,
@@ -704,6 +710,7 @@ export interface GameState {
   guideItemHighlights: string[]
   contextGuideTab: TabId | null
   darkMode: boolean
+  shopScrollTarget: CropId | null
 
   setTab: (tab: TabId) => void
   selectCrop: (id: CropId) => void
@@ -721,6 +728,9 @@ export interface GameState {
   isCropAvailable: (id: CropId) => boolean
   isTavernOpen: () => boolean
   machineQueueCapacity: (id: BuildingId) => number
+
+  navigateToItem: (itemId: ItemId, needQty?: number) => void
+  clearShopScrollTarget: () => void
 
   buySeed: (id: CropId, amount?: number) => void
   plant: (plotIndex: number) => void
@@ -804,6 +814,7 @@ const initial = () => {
     guideItemHighlights: [] as string[],
     contextGuideTab: null as TabId | null,
     darkMode: false,
+    shopScrollTarget: null as CropId | null,
   }
 }
 
@@ -903,6 +914,74 @@ export const useGame = create<GameState>()(
       isTavernOpen: () => get().unlocked.includes('tavern'),
       machineQueueCapacity: (id) =>
         machineQueueSize(id, get().machineQueueBonus),
+
+      navigateToItem: (itemId, needQty = 1) => {
+        const s = get()
+        const meta = ITEM_META[itemId]
+        const have = s.inventory[itemId] ?? 0
+        if (have >= needQty) return
+
+        if (isCropItem(itemId)) {
+          const crop = CROPS[itemId]
+          const seedCount = s.seeds[itemId] ?? 0
+          if (seedCount > 0) {
+            set({
+              tab: 'farm',
+              selectedCrop: itemId,
+              shopScrollTarget: null,
+              toast: `Selected ${crop.name} seeds — tap empty soil to plant`,
+            })
+            return
+          }
+          if (s.isCropAvailable(itemId)) {
+            set({
+              tab: 'shop',
+              shopScrollTarget: itemId,
+              guideItemHighlights: [
+                ...new Set([...s.guideItemHighlights, itemId]),
+              ],
+              toast: `Buy ${crop.name} seeds in the shop`,
+            })
+            return
+          }
+          set({ toast: `${crop.name} seeds locked — finish Missions first` })
+          return
+        }
+
+        const machineId = machineBuildingForItem(itemId, s.unlocked)
+        if (machineId) {
+          set({
+            tab: 'machines',
+            selectedBuilding: machineId,
+            shopScrollTarget: null,
+            toast: `Make ${meta.name} at the ${BUILDINGS[machineId].name}`,
+          })
+          return
+        }
+
+        const animalBuilding = animalBuildingForProduct(itemId, s.unlocked)
+        if (animalBuilding) {
+          set({
+            tab: 'animals',
+            selectedAnimalBuilding: animalBuilding,
+            shopScrollTarget: null,
+            toast: `Collect ${meta.name} from your animals`,
+          })
+          return
+        }
+
+        const recipe = recipeProducing(itemId)
+        if (recipe) {
+          set({
+            toast: `Unlock the ${BUILDINGS[recipe.buildingId].name} via Missions first`,
+          })
+          return
+        }
+
+        set({ toast: `Find ${meta.name} through Missions and machines` })
+      },
+
+      clearShopScrollTarget: () => set({ shopScrollTarget: null }),
 
       track: (kind, target, amount = 1) => {
         const s = get()
