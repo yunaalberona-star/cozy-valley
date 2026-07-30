@@ -1,5 +1,12 @@
-import { GEAR_BLUEPRINTS } from './gear'
+import {
+  createGearInstance,
+  GEAR_BLUEPRINTS,
+} from './gear'
 import type { GearInstance, MaterialId } from '../types'
+
+export function rollGearDropCount(): number {
+  return 2 + Math.floor(Math.random() * 2)
+}
 
 const RARE_MATERIALS: MaterialId[] = [
   'magic_essence',
@@ -28,18 +35,11 @@ export function rollAdventureGear(
     const maxLvl = Math.max(minLvl, playerLevel)
     const span = maxLvl - minLvl + 1
     const level = minLvl + Math.floor(Math.random() * span)
-    drops.push({
-      id: createId(),
-      blueprintId: bp.id,
-      equippedBy: null,
-      level,
-    })
+    drops.push(
+      createGearInstance(bp.id, level, 'drop', playerLevel, createId),
+    )
   }
   return drops
-}
-
-export function rollGearDropCount(): number {
-  return 2 + Math.floor(Math.random() * 2)
 }
 
 export function rollRareMaterialDrops(

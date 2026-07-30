@@ -30,6 +30,7 @@ import {
   GEAR_BUILDINGS_STANDARD,
   GEAR_SLOT_LABEL,
   gearForNpc,
+  gearInstanceQuality,
   gearInstanceStats,
   MATERIAL_META,
   QUALITY_LABEL,
@@ -44,6 +45,13 @@ import {
   isMissionLevelGated,
 } from './game/data/missions'
 import { buildingUnlockLevel } from './game/data/levelUnlocks'
+import {
+  GATHER_SITE_MAX_SLOTS,
+  GATHER_SITES,
+  gatherSlotCost,
+  gatherYieldMultiplier,
+  materialRecipeYield,
+} from './game/data/gatherSites'
 import { MAX_RECRUITED_NPCS, NPC_LIST, NPCS } from './game/data/npcs'
 import {
   npcPower,
@@ -685,14 +693,14 @@ function IngredientBar({
   items,
   inventory,
   materials = {},
-  onNeedItem,
+  onNeedResource,
   label = 'Required items',
   compact = false,
 }: {
   items: { id: CraftResourceId; qty: number }[]
   inventory: Partial<Record<ItemId, number>>
   materials?: Partial<Record<MaterialId, number>>
-  onNeedItem: (id: ItemId, qty: number) => void
+  onNeedResource: (id: CraftResourceId, qty: number) => void
   label?: string | false
   compact?: boolean
 }) {
@@ -718,19 +726,18 @@ function IngredientBar({
           const meta = resourceMeta(id)
           const have = haveQty(id)
           const ok = have >= qty
-          const isMaterial = id in MATERIAL_META
           return (
             <button
               key={id}
               type="button"
               role="listitem"
               className={`ingredient-chip ${ok ? 'ok' : 'need'}`}
-              disabled={ok || isMaterial}
-              onClick={() => !isMaterial && onNeedItem(id as ItemId, qty)}
+              disabled={ok}
+              onClick={() => onNeedResource(id, qty)}
               title={
                 ok
                   ? `${meta.name}: ${have}/${qty} ready`
-                  : `${meta.name}: need ${qty} (have ${have})${isMaterial ? '' : ' — tap to find'}`
+                  : `${meta.name}: need ${qty} (have ${have}) — tap to find`
               }
             >
               <span>{meta.emoji}</span>
@@ -766,7 +773,8 @@ function MachinesView() {
   const machineQueueCapacity = useGame((s) => s.machineQueueCapacity)
   const startCraft = useGame((s) => s.startCraft)
   const collectCraft = useGame((s) => s.collectCraft)
-  const navigateToItem = useGame((s) => s.navigateToItem)
+  const gatherSlots = useGame((s) => s.gatherSlots)
+  const navigateToResource = useGame((s) => s.navigateToResource)
 
   const open =
     selectedBuilding && unlocked.includes(selectedBuilding)
@@ -978,7 +986,13 @@ function MachinesView() {
                       <p className="muted">
                         {recipeLocked
                           ? `🔒 Level ${recipe.unlockLevel}`
-                          : `${formatLeft(recipe.craftMs)} · +${recipe.xp} XP`}
+                          : `${formatLeft(recipe.craftMs)} · +${recipe.xp} XP${
+                              recipe.materialOutput &&
+                              (recipe.buildingId === 'miner' ||
+                                recipe.buildingId === 'wood_cutter')
+                                ? ` · yields ${materialRecipeYield(recipe, gatherSlots)}× ${MATERIAL_META[recipe.materialOutput].name}`
+                                : ''
+                            }`}
                       </p>
                     </div>
                   </div>
@@ -989,7 +1003,7 @@ function MachinesView() {
                     }))}
                     inventory={inventory}
                     materials={materials}
-                    onNeedItem={navigateToItem}
+                    onNeedResource={navigateToResource}
                     label={false}
                     compact
                   />
@@ -1025,7 +1039,7 @@ function AnimalsView() {
   const buyAnimal = useGame((s) => s.buyAnimal)
   const feedAnimal = useGame((s) => s.feedAnimal)
   const collectAnimal = useGame((s) => s.collectAnimal)
-  const navigateToItem = useGame((s) => s.navigateToItem)
+  const navigateToResource = useGame((s) => s.navigateToResource)
 
   const open =
     selectedAnimalBuilding && unlocked.includes(selectedAnimalBuilding)
@@ -1099,7 +1113,7 @@ function AnimalsView() {
             <IngredientBar
               items={[{ id: def.feedItem, qty: def.feedQty ?? 1 }]}
               inventory={inventory}
-              onNeedItem={navigateToItem}
+              onNeedResource={navigateToResource}
             />
           )}
 
@@ -1167,7 +1181,7 @@ function AnimalsView() {
                         const need = def.feedQty ?? 1
                         const have = inventory[def.feedItem!] ?? 0
                         if (have < need) {
-                          navigateToItem(def.feedItem!, need)
+                          navigateToResource(def.feedItem!, need)
                         } else {
                           feedAnimal(a.id)
                         }
@@ -1210,7 +1224,7 @@ function OrdersView() {
   const inventory = useGame((s) => s.inventory)
   const activeOrders = useGame((s) => s.activeOrders)
   const fulfillOrder = useGame((s) => s.fulfillOrder)
-  const navigateToItem = useGame((s) => s.navigateToItem)
+  const navigateToResource = useGame((s) => s.navigateToResource)
   const isOrdersOpen = useGame((s) => s.isOrdersOpen)
   const xp = useGame((s) => s.xp)
   const { level } = xpProgress(xp)
@@ -1261,7 +1275,7 @@ function OrdersView() {
                   qty: qty ?? 0,
                 }))}
                 inventory={inventory}
-                onNeedItem={navigateToItem}
+                onNeedResource={navigateToResource}
                 label={false}
                 compact
               />
@@ -2084,7 +2098,8 @@ function BagView() {
               <span>{bp.emoji}</span>
               <strong>+{stats.skillBonus}</strong>
               <small>
-                {bp.name} · {QUALITY_LABEL[bp.quality]}
+                {bp.name} · {QUALITY_LABEL[gearInstanceQuality(g)]} · Lv{' '}
+                {g.level}
               </small>
             </div>
           )
@@ -2175,7 +2190,7 @@ function RecruitCard({
                 >
                   <small className="gear-slot-label">{GEAR_SLOT_LABEL[slot]}</small>
                   <span
-                    className={`gear-slot-btn ${equipped ? 'filled' : 'empty'}`}
+                    className={`gear-slot-btn ${equipped ? 'filled' : 'empty'}${equipped ? ` quality-${gearInstanceQuality(equipped)}` : ''}`}
                   >
                     {bp ? bp.emoji : '+'}
                   </span>
@@ -2211,11 +2226,13 @@ function RecruitCard({
                   const opt = GEAR_BLUEPRINT_BY_ID[g.blueprintId]
                   if (!opt) return null
                   const st = gearInstanceStats(g)
+                  const qual = gearInstanceQuality(g)
+                  const upgraded = qual !== opt.quality
                   return (
                     <button
                       key={g.id}
                       type="button"
-                      className="gear-pick-chip"
+                      className={`gear-pick-chip quality-${qual}`}
                       onClick={() => {
                         equipGear(g.id, r.id)
                         setActiveSlot(null)
@@ -2225,7 +2242,10 @@ function RecruitCard({
                       <span className="gear-pick-emoji">{opt.emoji}</span>
                       <span className="gear-pick-meta">
                         <strong>{opt.name}</strong>
-                        <small>Lv {g.level}</small>
+                        <small>
+                          Lv {g.level} · {QUALITY_LABEL[qual]}
+                          {upgraded ? ' ✨' : ''}
+                        </small>
                       </span>
                     </button>
                   )
@@ -2332,6 +2352,162 @@ function WorkshopCard({
   )
 }
 
+function MaterialsView() {
+  const coins = useGame((s) => s.coins)
+  const unlocked = useGame((s) => s.unlocked)
+  const ownedBuildings = useGame((s) => s.ownedBuildings)
+  const materialsPane = useGame((s) => s.materialsPane)
+  const gatherSlots = useGame((s) => s.gatherSlots)
+  const setMaterialsPane = useGame((s) => s.setMaterialsPane)
+  const purchaseGatherSlot = useGame((s) => s.purchaseGatherSlot)
+  const setTab = useGame((s) => s.setTab)
+  const selectBuilding = useGame((s) => s.selectBuilding)
+
+  const site = GATHER_SITES[materialsPane]
+  const owned = gatherSlots[materialsPane]
+  const multiplier = gatherYieldMultiplier(materialsPane, owned)
+  const machineUnlocked = unlocked.includes(site.machineId)
+  const machineBuilt = ownedBuildings.includes(site.machineId)
+  const canExpand = owned < GATHER_SITE_MAX_SLOTS
+  const nextCost = gatherSlotCost(materialsPane, owned)
+  const recipes = machineUnlocked
+    ? allRecipesForBuilding(site.machineId).filter((r) => r.materialOutput)
+    : []
+
+  return (
+    <>
+      <div
+        className="pane-tabs pane-tabs-2 sub-pane-tabs"
+        role="tablist"
+        aria-label="Material sites"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={materialsPane === 'mountain'}
+          className={materialsPane === 'mountain' ? 'active' : ''}
+          onClick={() => setMaterialsPane('mountain')}
+        >
+          ⛰️ Mountain
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={materialsPane === 'forest'}
+          className={materialsPane === 'forest' ? 'active' : ''}
+          onClick={() => setMaterialsPane('forest')}
+        >
+          🌲 Forest
+        </button>
+      </div>
+
+      <div className="recipe-card highlight">
+        <div className="recipe-top">
+          <span className="big-emoji">{site.emoji}</span>
+          <div>
+            <strong>{site.name}</strong>
+            <p className="muted">{site.blurb}</p>
+            <p className="muted">
+              {machineUnlocked
+                ? `${site.machineName} yield ×${multiplier} per queue collect · ${owned}/${GATHER_SITE_MAX_SLOTS} slots`
+                : `🔒 Unlock ${site.machineName} via Missions to expand this site`}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {machineUnlocked && (
+        <>
+          <h3 className="section-label">Gather slots</h3>
+          <p className="muted pad small">
+            Each slot multiplies {site.machineName} output when you collect a
+            finished craft. Slot 1 is free — buy more to boost every recipe.
+          </p>
+          <div className="gather-slot-grid">
+            {Array.from({ length: GATHER_SITE_MAX_SLOTS }, (_, i) => {
+              const slotNum = i + 1
+              const active = slotNum <= owned
+              const isNext = slotNum === owned + 1
+              return (
+                <div
+                  key={slotNum}
+                  className={`gather-slot ${active ? 'active' : ''} ${isNext && canExpand ? 'buyable' : ''}`}
+                >
+                  <span className="gather-slot-num">{slotNum}</span>
+                  {active ? (
+                    <span className="gather-slot-label">Active</span>
+                  ) : isNext && canExpand ? (
+                    <button
+                      type="button"
+                      className="btn tiny full"
+                      disabled={coins < nextCost}
+                      onClick={() => purchaseGatherSlot(materialsPane)}
+                    >
+                      🪙 {nextCost}
+                    </button>
+                  ) : (
+                    <span className="gather-slot-label muted">—</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {canExpand && (
+            <button
+              type="button"
+              className="btn secondary full"
+              disabled={coins < nextCost}
+              onClick={() => purchaseGatherSlot(materialsPane)}
+            >
+              Buy slot {owned + 1} · 🪙 {nextCost} (yield ×{owned + 1})
+            </button>
+          )}
+
+          {recipes.length > 0 && (
+            <>
+              <h3 className="section-label">Current yields</h3>
+              <div className="card-list compact-list">
+                {recipes.map((recipe) => (
+                  <div key={recipe.id} className="recipe-card compact">
+                    <div className="recipe-top">
+                      <span className="big-emoji">{recipe.emoji}</span>
+                      <div>
+                        <strong>{recipe.name}</strong>
+                        <p className="muted">
+                          {materialRecipeYield(recipe, gatherSlots)}×{' '}
+                          {recipe.materialOutput
+                            ? MATERIAL_META[recipe.materialOutput].name
+                            : 'output'}{' '}
+                          per collect
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <button
+            type="button"
+            className="btn ghost full"
+            disabled={!machineUnlocked}
+            onClick={() => {
+              setTab('machines')
+              selectBuilding(site.machineId)
+            }}
+          >
+            {machineBuilt
+              ? `Open ${site.machineName} →`
+              : `Build ${site.machineName} in Machines →`}
+          </button>
+        </>
+      )}
+    </>
+  )
+}
+
 function AdventureView() {
   const now = useNow()
   const xp = useGame((s) => s.xp)
@@ -2355,6 +2531,7 @@ function AdventureView() {
   const collectAdventure = useGame((s) => s.collectAdventure)
   const startGearCraft = useGame((s) => s.startGearCraft)
   const collectGearCraft = useGame((s) => s.collectGearCraft)
+  const navigateToResource = useGame((s) => s.navigateToResource)
   const [partyPick, setPartyPick] = useState<Record<string, string[]>>({})
 
   const idle = idleRecruits(recruitedNpcs, activeAdventures)
@@ -2437,7 +2614,7 @@ function AdventureView() {
         <p>Recruit heroes, craft gear, send parties exploring.</p>
       </div>
 
-      <div className="pane-tabs pane-tabs-4" role="tablist" aria-label="Adventure areas">
+      <div className="pane-tabs pane-tabs-5" role="tablist" aria-label="Adventure areas">
         <button
           type="button"
           role="tab"
@@ -2464,6 +2641,15 @@ function AdventureView() {
           onClick={() => setAdventurePane('workshop')}
         >
           ⚒️ Workshop
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={adventurePane === 'materials'}
+          className={adventurePane === 'materials' ? 'active' : ''}
+          onClick={() => setAdventurePane('materials')}
+        >
+          🪨 Materials
         </button>
         <button
           type="button"
@@ -2660,8 +2846,11 @@ function AdventureView() {
                         <div>
                           <strong>{bp.name}</strong>
                           <p className="muted">
-                            {QUALITY_LABEL[bp.quality]} · {GEAR_SLOT_LABEL[bp.slot]} ·{' '}
-                            {formatLeft(bp.craftMs)}
+                            Base {QUALITY_LABEL[bp.quality]} ·{' '}
+                            {GEAR_SLOT_LABEL[bp.slot]} · {formatLeft(bp.craftMs)}
+                          </p>
+                          <p className="muted small">
+                            Chance to roll higher quality when crafting
                           </p>
                           <p className="muted">
                             ⚔️ {stats.attack} 🛡️ {stats.defense} ❤️ {stats.hp} ·
@@ -2669,22 +2858,17 @@ function AdventureView() {
                           </p>
                         </div>
                       </div>
-                      <ul className="need-list">
-                        {Object.entries(bp.inputs).map(([id, qty]) => {
-                          const meta = resourceMeta(id)
-                          const have =
-                            id in MATERIAL_META
-                              ? (materials[id as keyof typeof MATERIAL_META] ?? 0)
-                              : (inventory[id as ItemId] ?? 0)
-                          const ok = have >= (qty ?? 0)
-                          return (
-                            <li key={id} className={ok ? 'ok' : 'no'}>
-                              {meta.emoji} {qty} {meta.name}{' '}
-                              <span>({have})</span>
-                            </li>
-                          )
-                        })}
-                      </ul>
+                      <IngredientBar
+                        items={Object.entries(bp.inputs).map(([id, qty]) => ({
+                          id: id as CraftResourceId,
+                          qty: qty ?? 0,
+                        }))}
+                        inventory={inventory}
+                        materials={materials}
+                        onNeedResource={navigateToResource}
+                        label={false}
+                        compact
+                      />
                       <button
                         type="button"
                         className="btn full"
@@ -2701,6 +2885,8 @@ function AdventureView() {
           )}
         </>
       )}
+
+      {adventurePane === 'materials' && <MaterialsView />}
 
       {adventurePane === 'lands' && (
         <>

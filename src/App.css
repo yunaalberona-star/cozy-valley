@@ -1070,10 +1070,74 @@ html.theme-dark .ingredient-chip.need {
   grid-template-columns: repeat(2, 1fr);
 }
 
+.pane-tabs-5 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.pane-tabs-2.sub-pane-tabs {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
 @media (min-width: 420px) {
   .pane-tabs-4 {
     grid-template-columns: repeat(4, 1fr);
   }
+
+  .pane-tabs-5 {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
+.gather-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+@media (min-width: 420px) {
+  .gather-slot-grid {
+    grid-template-columns: repeat(8, 1fr);
+  }
+}
+
+.gather-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border-radius: 12px;
+  border: 1.5px dashed rgba(63, 122, 69, 0.25);
+  background: rgba(63, 122, 69, 0.04);
+  min-height: 72px;
+}
+
+.gather-slot.active {
+  border-style: solid;
+  border-color: rgba(63, 122, 69, 0.45);
+  background: rgba(63, 122, 69, 0.12);
+}
+
+.gather-slot.buyable {
+  border-color: var(--accent);
+  background: rgba(255, 193, 7, 0.08);
+}
+
+.gather-slot-num {
+  font-weight: 900;
+  font-size: 0.85rem;
+}
+
+.gather-slot-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.compact-list .recipe-card.compact {
+  padding: 10px 12px;
 }
 
 .pane-tabs button {
@@ -1184,6 +1248,26 @@ html.theme-dark .ingredient-chip.need {
   align-items: flex-start;
   gap: 2px;
   text-align: left;
+}
+
+.gear-pick-chip.quality-valley {
+  border-color: #5a9a62;
+  background: rgba(90, 154, 98, 0.1);
+}
+
+.gear-pick-chip.quality-masterwork {
+  border-color: #c9a227;
+  background: rgba(201, 162, 39, 0.12);
+  box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.25);
+}
+
+.gear-slot-btn.filled.quality-valley {
+  border-color: #5a9a62;
+}
+
+.gear-slot-btn.filled.quality-masterwork {
+  border-color: #c9a227;
+  box-shadow: 0 0 0 2px rgba(201, 162, 39, 0.3);
 }
 
 .gear-pick-meta strong {

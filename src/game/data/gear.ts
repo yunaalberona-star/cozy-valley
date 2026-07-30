@@ -191,6 +191,91 @@ export const QUALITY_MULT: Record<GearQuality, number> = {
   masterwork: 2,
 }
 
+export const GEAR_QUALITY_ORDER: GearQuality[] = [
+  'rustic',
+  'valley',
+  'masterwork',
+]
+
+export type GearQualitySource = 'craft' | 'drop'
+
+export function rollGearQuality(
+  base: GearQuality,
+  source: GearQualitySource,
+  playerLevel = 1,
+  blueprintUnlock = 15,
+): GearQuality {
+  const tier = GEAR_QUALITY_ORDER.indexOf(base)
+  const levelBonus = Math.min(
+    0.1,
+    Math.max(0, (playerLevel - blueprintUnlock) * 0.005),
+  )
+  const r = Math.random()
+
+  if (source === 'craft') {
+    if (tier === 0) {
+      if (r < 0.08 + levelBonus) return 'masterwork'
+      if (r < 0.38 + levelBonus) return 'valley'
+      return 'rustic'
+    }
+    if (tier === 1) {
+      if (r < 0.45 + levelBonus) return 'masterwork'
+      if (r < 0.52) return 'rustic'
+      return 'valley'
+    }
+    if (r < 0.2 + levelBonus * 0.5) return 'valley'
+    return 'masterwork'
+  }
+
+  if (tier === 0) {
+    if (r < 0.05 + levelBonus * 0.5) return 'masterwork'
+    if (r < 0.28 + levelBonus * 0.5) return 'valley'
+    return 'rustic'
+  }
+  if (tier === 1) {
+    if (r < 0.32 + levelBonus * 0.5) return 'masterwork'
+    if (r < 0.4) return 'rustic'
+    return 'valley'
+  }
+  if (r < 0.18 + levelBonus * 0.3) return 'valley'
+  return 'masterwork'
+}
+
+export function gearInstanceQuality(instance: GearInstance): GearQuality {
+  if (instance.quality) return instance.quality
+  const bp = GEAR_BLUEPRINT_BY_ID[instance.blueprintId]
+  return bp?.quality ?? 'rustic'
+}
+
+export function isQualityUpgrade(
+  base: GearQuality,
+  rolled: GearQuality,
+): boolean {
+  return (
+    GEAR_QUALITY_ORDER.indexOf(rolled) > GEAR_QUALITY_ORDER.indexOf(base)
+  )
+}
+
+export function createGearInstance(
+  blueprintId: string,
+  level: number,
+  source: GearQualitySource,
+  playerLevel: number,
+  createId: () => string,
+): GearInstance {
+  const bp = GEAR_BLUEPRINT_BY_ID[blueprintId]
+  const quality = bp
+    ? rollGearQuality(bp.quality, source, playerLevel, bp.unlockLevel)
+    : 'rustic'
+  return {
+    id: createId(),
+    blueprintId,
+    equippedBy: null,
+    level,
+    quality,
+  }
+}
+
 export const GEAR_BLUEPRINTS: GearBlueprintDef[] = [
   // Smithy — Wallace
   {
@@ -726,8 +811,12 @@ export function blueprintsForBuilding(
   )
 }
 
-export function scaledStats(blueprint: GearBlueprintDef) {
-  const m = QUALITY_MULT[blueprint.quality]
+export function scaledStats(
+  blueprint: GearBlueprintDef,
+  quality?: GearQuality,
+) {
+  const q = quality ?? blueprint.quality
+  const m = QUALITY_MULT[q]
   return {
     attack: Math.round(blueprint.stats.attack * m),
     defense: Math.round(blueprint.stats.defense * m),
@@ -739,7 +828,7 @@ export function scaledStats(blueprint: GearBlueprintDef) {
 export function gearInstanceStats(instance: GearInstance) {
   const bp = GEAR_BLUEPRINT_BY_ID[instance.blueprintId]
   if (!bp) return { attack: 0, defense: 0, hp: 0, skillBonus: 0 }
-  const base = scaledStats(bp)
+  const base = scaledStats(bp, gearInstanceQuality(instance))
   const lvl = Math.max(1, instance.level ?? 1)
   const mult = 1 + (lvl - 1) * 0.12
   return {

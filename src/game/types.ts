@@ -184,7 +184,16 @@ export type TabId =
 
 export type MissionPaneId = 'story' | 'events'
 
-export type AdventurePaneId = 'tavern' | 'recruits' | 'workshop' | 'lands'
+export type AdventurePaneId =
+  | 'tavern'
+  | 'recruits'
+  | 'workshop'
+  | 'materials'
+  | 'lands'
+
+export type GatherSiteId = 'mountain' | 'forest'
+
+export type MaterialsPaneId = GatherSiteId
 
 export type MissionGoalKind =
   | 'harvest'
@@ -452,6 +461,8 @@ export interface GearInstance {
   equippedBy: string | null
   /** Gear level — stats scale with this */
   level: number
+  /** Rolled quality (may exceed blueprint base on craft/drop) */
+  quality: GearQuality
 }
 
 export interface GearCraftJob {

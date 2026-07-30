@@ -8,19 +8,32 @@ import {
   rollGearDropCount,
   rollRareMaterialDrops,
 } from './data/adventureLoot'
+import {
+  GATHER_SITE_MAX_SLOTS,
+  GATHER_SITES,
+  gatherSlotCost,
+  materialRecipeYield,
+} from './data/gatherSites'
 import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
 import { CROPS, cropsCrossingLevels, levelFromXp, xpToReachLevel } from './data/crops'
 import {
   animalBuildingForProduct,
+  animalBuildingForMaterial,
+  adventureRewardsMaterial,
   isCropItem,
   machineBuildingForItem,
+  machineBuildingForMaterial,
   recipeProducing,
+  recipeProducingMaterial,
 } from './data/itemSources'
 import { recipeUnlockLevel } from './data/unlockOrder'
 import {
   GEAR_BLUEPRINT_BY_ID,
   GEAR_BUILDINGS,
+  createGearInstance,
+  isQualityUpgrade,
   MATERIAL_META,
+  QUALITY_LABEL,
 } from './data/gear'
 import {
   EVENT_BY_ID,
@@ -63,6 +76,8 @@ import type {
   ActiveAdventure,
   ActiveOrder,
   AdventurePaneId,
+  GatherSiteId,
+  MaterialsPaneId,
   AnimalBuildingId,
   AnimalInstance,
   AnimalTypeId,
@@ -676,9 +691,21 @@ function migrateSaveState(
     pane !== 'tavern' &&
     pane !== 'recruits' &&
     pane !== 'lands' &&
-    pane !== 'workshop'
+    pane !== 'workshop' &&
+    pane !== 'materials'
   ) {
     state.adventurePane = 'tavern'
+  }
+  if (!state.gatherSlots || typeof state.gatherSlots !== 'object') {
+    state.gatherSlots = { mountain: 1, forest: 1 }
+  } else {
+    const slots = state.gatherSlots as Record<GatherSiteId, number>
+    if (typeof slots.mountain !== 'number') slots.mountain = 1
+    if (typeof slots.forest !== 'number') slots.forest = 1
+  }
+  const materialsPane = state.materialsPane
+  if (materialsPane !== 'mountain' && materialsPane !== 'forest') {
+    state.materialsPane = 'mountain'
   }
   if (version < 6) {
     const unlocked = (state.unlocked as UnlockId[] | undefined) ?? []
@@ -797,6 +824,25 @@ function migrateSaveState(
       }))
     }
   }
+  if (version < 13) {
+    if (Array.isArray(state.gearInventory)) {
+      state.gearInventory = (state.gearInventory as GearInstance[]).map((g) => {
+        const bp = GEAR_BLUEPRINT_BY_ID[g.blueprintId]
+        return {
+          ...g,
+          quality: g.quality ?? bp?.quality ?? 'rustic',
+        }
+      })
+    }
+  }
+  if (version < 14) {
+    if (!state.gatherSlots || typeof state.gatherSlots !== 'object') {
+      state.gatherSlots = { mountain: 1, forest: 1 }
+    }
+    if (state.materialsPane !== 'mountain' && state.materialsPane !== 'forest') {
+      state.materialsPane = 'mountain'
+    }
+  }
   return state
 }
 
@@ -882,6 +928,8 @@ export interface GameState {
   selectedAnimalBuilding: AnimalBuildingId | null
   selectedGearBuilding: GearBuildingId | null
   adventurePane: AdventurePaneId
+  materialsPane: MaterialsPaneId
+  gatherSlots: Record<GatherSiteId, number>
   recruitedNpcs: RecruitedNpc[]
   activeAdventures: ActiveAdventure[]
   gearInventory: GearInstance[]
@@ -901,6 +949,8 @@ export interface GameState {
   selectAnimalBuilding: (id: AnimalBuildingId | null) => void
   selectGearBuilding: (id: GearBuildingId | null) => void
   setAdventurePane: (pane: AdventurePaneId) => void
+  setMaterialsPane: (pane: MaterialsPaneId) => void
+  purchaseGatherSlot: (siteId: GatherSiteId) => void
   dismissPopup: () => void
   clearToast: () => void
   toggleDarkMode: () => void
@@ -914,6 +964,11 @@ export interface GameState {
   machineQueueCapacity: (id: BuildingId) => number
 
   navigateToItem: (itemId: ItemId, needQty?: number, force?: boolean) => void
+  navigateToResource: (
+    resourceId: CraftResourceId,
+    needQty?: number,
+    force?: boolean,
+  ) => void
   navigateToMissionGoal: (goal: MissionGoal) => void
   clearShopScrollTarget: () => void
   clearMachineScrollTarget: () => void
@@ -1002,6 +1057,8 @@ const initial = () => {
     selectedAnimalBuilding: null as AnimalBuildingId | null,
     selectedGearBuilding: null as GearBuildingId | null,
     adventurePane: 'tavern' as AdventurePaneId,
+    materialsPane: 'mountain' as MaterialsPaneId,
+    gatherSlots: { mountain: 1, forest: 1 } as Record<GatherSiteId, number>,
     recruitedNpcs: [] as RecruitedNpc[],
     activeAdventures: [] as ActiveAdventure[],
     gearInventory: [] as GearInstance[],
@@ -1111,6 +1168,34 @@ export const useGame = create<GameState>()(
                 : null
               : null,
         })),
+      setMaterialsPane: (pane) => set({ materialsPane: pane }),
+      purchaseGatherSlot: (siteId) => {
+        const site = GATHER_SITES[siteId]
+        const s = get()
+        if (!s.unlocked.includes(site.machineId)) {
+          set({
+            toast: `Unlock ${site.machineName} first — check Missions & Machines`,
+          })
+          return
+        }
+        const owned = s.gatherSlots[siteId] ?? 1
+        if (owned >= GATHER_SITE_MAX_SLOTS) {
+          set({ toast: `${site.name} is fully expanded` })
+          return
+        }
+        const cost = gatherSlotCost(siteId, owned)
+        if (s.coins < cost) {
+          set({ toast: `Need ${cost} coins to expand ${site.name}` })
+          return
+        }
+        const next = owned + 1
+        set({
+          coins: s.coins - cost,
+          gatherSlots: { ...s.gatherSlots, [siteId]: next },
+          toast: `${site.name} → ${next} slots · ${site.machineName} yields ×${next} per craft`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
       dismissPopup: () =>
         set((s) => ({ popupQueue: s.popupQueue.slice(1) })),
       clearToast: () => set({ toast: null }),
@@ -1211,6 +1296,78 @@ export const useGame = create<GameState>()(
         }
 
         set({ toast: `Find ${meta.name} through Missions and machines` })
+      },
+
+      navigateToResource: (resourceId, needQty = 1, force = false) => {
+        if (!isMaterialId(resourceId)) {
+          get().navigateToItem(resourceId, needQty, force)
+          return
+        }
+        const s = get()
+        const materialId = resourceId
+        const have = s.materials[materialId] ?? 0
+        if (!force && have >= needQty) return
+
+        const meta = MATERIAL_META[materialId]
+
+        const machineId = machineBuildingForMaterial(materialId, s.unlocked)
+        if (machineId) {
+          const recipe = recipeProducingMaterial(materialId)
+          set({
+            tab: 'machines',
+            selectedBuilding: machineId,
+            shopScrollTarget: null,
+            machineScrollTarget: recipe?.id ?? null,
+            guideItemHighlights: [
+              ...new Set([...s.guideItemHighlights, materialId]),
+            ],
+            toast: `Make ${meta.name} at the ${BUILDINGS[machineId].name}`,
+          })
+          return
+        }
+
+        const animalBuilding = animalBuildingForMaterial(materialId, s.unlocked)
+        if (animalBuilding) {
+          set({
+            tab: 'animals',
+            selectedAnimalBuilding: animalBuilding,
+            shopScrollTarget: null,
+            machineScrollTarget: null,
+            toast: `Collect ${meta.name} from your animals`,
+          })
+          return
+        }
+
+        const recipe = recipeProducingMaterial(materialId)
+        if (recipe) {
+          if (adventureRewardsMaterial(materialId) && s.isTavernOpen()) {
+            set({
+              tab: 'adventure',
+              adventurePane: 'lands',
+              shopScrollTarget: null,
+              machineScrollTarget: null,
+              toast: `${meta.name} drops from expeditions — unlock ${BUILDINGS[recipe.buildingId].name} or send parties exploring`,
+            })
+            return
+          }
+          set({
+            toast: `Unlock the ${BUILDINGS[recipe.buildingId].name} via Missions first`,
+          })
+          return
+        }
+
+        if (adventureRewardsMaterial(materialId) && s.isTavernOpen()) {
+          set({
+            tab: 'adventure',
+            adventurePane: 'lands',
+            shopScrollTarget: null,
+            machineScrollTarget: null,
+            toast: `${meta.name} drops from expeditions — send recruits exploring`,
+          })
+          return
+        }
+
+        set({ toast: `${meta.name} comes from machines, animals, or adventures` })
       },
 
       navigateToMissionGoal: (goal) => {
@@ -1500,16 +1657,17 @@ export const useGame = create<GameState>()(
           : recipe.output
             ? ITEM_META[recipe.output].name
             : 'item'
+        const outputQty = materialRecipeYield(recipe, s.gatherSlots)
         set({
           craftQueue,
           inventory: recipe.output
-            ? addItem(s.inventory, recipe.output, recipe.outputQty)
+            ? addItem(s.inventory, recipe.output, outputQty)
             : s.inventory,
           materials: recipe.materialOutput
             ? addMaterial(
                 s.materials,
                 recipe.materialOutput,
-                recipe.outputQty,
+                outputQty,
               )
             : s.materials,
           xp: xpResult.xp,
@@ -1519,10 +1677,10 @@ export const useGame = create<GameState>()(
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          toast: `Collected ${recipe.outputQty}× ${outputLabel}`,
+          toast: `Collected ${outputQty}× ${outputLabel}`,
         })
         if (recipe.output) {
-          get().track('craft', recipe.output, recipe.outputQty)
+          get().track('craft', recipe.output, outputQty)
         }
       },
 
@@ -2352,12 +2510,14 @@ export const useGame = create<GameState>()(
         const blueprint = GEAR_BLUEPRINT_BY_ID[job.blueprintId]
         if (!blueprint) return
         const craftLevel = levelFromXp(s.xp)
-        const gear: GearInstance = {
-          id: uid(),
-          blueprintId: job.blueprintId,
-          equippedBy: null,
-          level: craftLevel,
-        }
+        const gear = createGearInstance(
+          job.blueprintId,
+          craftLevel,
+          'craft',
+          craftLevel,
+          uid,
+        )
+        const upgraded = isQualityUpgrade(blueprint.quality, gear.quality)
         const xpResult = applyXpGain(
           s.xp,
           blueprint.xp,
@@ -2381,7 +2541,9 @@ export const useGame = create<GameState>()(
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          toast: `Crafted ${blueprint.name}!`,
+          toast: upgraded
+            ? `Crafted ${blueprint.name} — ${QUALITY_LABEL[gear.quality]}! ✨`
+            : `Crafted ${blueprint.name} (${QUALITY_LABEL[gear.quality]})`,
         })
       },
 
@@ -2552,6 +2714,8 @@ export const useGame = create<GameState>()(
         selectedAnimalBuilding: s.selectedAnimalBuilding,
         selectedGearBuilding: s.selectedGearBuilding,
         adventurePane: s.adventurePane,
+        materialsPane: s.materialsPane,
+        gatherSlots: s.gatherSlots,
         recruitedNpcs: s.recruitedNpcs,
         activeAdventures: s.activeAdventures,
         gearInventory: s.gearInventory,
