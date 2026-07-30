@@ -1062,6 +1062,7 @@ function OrdersView() {
   const inventory = useGame((s) => s.inventory)
   const activeOrders = useGame((s) => s.activeOrders)
   const fulfillOrder = useGame((s) => s.fulfillOrder)
+  const navigateToItem = useGame((s) => s.navigateToItem)
   const isOrdersOpen = useGame((s) => s.isOrdersOpen)
   const xp = useGame((s) => s.xp)
   const { level } = xpProgress(xp)
@@ -1106,18 +1107,16 @@ function OrdersView() {
                   </p>
                 </div>
               </div>
-              <ul className="need-list">
-                {Object.entries(order.needs).map(([id, qty]) => {
-                  const meta = ITEM_META[id as ItemId]
-                  const have = inventory[id as ItemId] ?? 0
-                  const ok = have >= (qty ?? 0)
-                  return (
-                    <li key={id} className={ok ? 'ok' : 'no'}>
-                      {meta?.emoji} {qty} {meta?.name} <span>({have})</span>
-                    </li>
-                  )
-                })}
-              </ul>
+              <IngredientBar
+                items={Object.entries(order.needs).map(([id, qty]) => ({
+                  id: id as ItemId,
+                  qty: qty ?? 0,
+                }))}
+                inventory={inventory}
+                onNeedItem={navigateToItem}
+                label={false}
+                compact
+              />
               <button
                 type="button"
                 className="btn full"
