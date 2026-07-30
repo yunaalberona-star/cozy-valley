@@ -284,6 +284,14 @@ export function xpForLevel(level: number): number {
   return Math.floor(40 * level ** 1.45)
 }
 
+export function xpToReachLevel(targetLevel: number): number {
+  let total = 0
+  for (let level = 1; level < targetLevel; level++) {
+    total += xpForLevel(level)
+  }
+  return total
+}
+
 export function levelFromXp(xp: number): number {
   let level = 1
   let remaining = xp

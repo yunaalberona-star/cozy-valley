@@ -4,7 +4,7 @@ import { ANIMALS } from './data/animals'
 import { ANIMAL_BUILDINGS } from './data/animalBuildings'
 import { ADVENTURE_BY_ID, TAVERN_UNLOCK_LEVEL } from './data/adventures'
 import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
-import { CROPS, cropsCrossingLevels, levelFromXp } from './data/crops'
+import { CROPS, cropsCrossingLevels, levelFromXp, xpToReachLevel } from './data/crops'
 import {
   animalBuildingForProduct,
   isCropItem,
@@ -673,7 +673,12 @@ function migrateSaveState(
   if (!Array.isArray(state.gearInventory)) state.gearInventory = []
   if (!Array.isArray(state.gearCraftQueue)) state.gearCraftQueue = []
   const pane = state.adventurePane
-  if (pane !== 'tavern' && pane !== 'lands' && pane !== 'workshop') {
+  if (
+    pane !== 'tavern' &&
+    pane !== 'recruits' &&
+    pane !== 'lands' &&
+    pane !== 'workshop'
+  ) {
     state.adventurePane = 'tavern'
   }
   if (version < 6) {
@@ -932,6 +937,8 @@ export interface GameState {
   ) => void
 
   resetGame: () => void
+  /** Local dev only — no-op in production builds */
+  devSetPlayerLevel: (targetLevel: number) => void
 }
 
 const initial = () => {
@@ -1025,11 +1032,19 @@ export const useGame = create<GameState>()(
       ...initial(),
 
       setTab: (tab) =>
-        set((s) => ({
-          tab,
-          guideTabPulses: s.guideTabPulses.filter((t) => t !== tab),
-          contextGuideTab: s.contextGuideTab === tab ? null : s.contextGuideTab,
-        })),
+        set((s) => {
+          const switching = s.tab !== tab
+          return {
+            tab,
+            selectedBuilding:
+              switching && tab === 'machines' ? null : s.selectedBuilding,
+            selectedAnimalBuilding:
+              switching && tab === 'animals' ? null : s.selectedAnimalBuilding,
+            guideTabPulses: s.guideTabPulses.filter((t) => t !== tab),
+            contextGuideTab:
+              s.contextGuideTab === tab ? null : s.contextGuideTab,
+          }
+        }),
       selectCrop: (id) => set({ selectedCrop: id }),
       selectBuilding: (id) =>
         set((s) => ({
@@ -1055,7 +1070,16 @@ export const useGame = create<GameState>()(
               ? s.guideItemHighlights.filter((h) => h !== id)
               : s.guideItemHighlights,
         })),
-      setAdventurePane: (pane) => set({ adventurePane: pane }),
+      setAdventurePane: (pane) =>
+        set((s) => ({
+          adventurePane: pane,
+          selectedGearBuilding:
+            pane === 'workshop'
+              ? s.adventurePane === 'workshop'
+                ? s.selectedGearBuilding
+                : null
+              : null,
+        })),
       dismissPopup: () =>
         set((s) => ({ popupQueue: s.popupQueue.slice(1) })),
       clearToast: () => set({ toast: null }),
@@ -2101,7 +2125,8 @@ export const useGame = create<GameState>()(
         set({
           coins: s.coins - def.hireCost,
           recruitedNpcs: [...s.recruitedNpcs, recruit],
-          toast: `${def.name} joined your party!`,
+          adventurePane: 'recruits',
+          toast: `${def.name} joined your party! Check Recruits to equip gear.`,
         })
         get().track('own_coins', undefined, get().coins)
       },
@@ -2325,6 +2350,41 @@ export const useGame = create<GameState>()(
       },
 
       resetGame: () => set({ ...initial() }),
+
+      devSetPlayerLevel: (targetLevel) => {
+        if (!import.meta.env.DEV) return
+        const level = Math.max(1, Math.floor(targetLevel))
+        const s = get()
+        const oldLevel = levelFromXp(s.xp)
+        const newXp = xpToReachLevel(level)
+        const unlocked = syncLevelUnlocks(newXp, s.unlocked)
+        let seeds = { ...s.seeds }
+        for (const cropId of cropsCrossingLevels(oldLevel, level)) {
+          seeds[cropId] = (seeds[cropId] ?? 0) + SEED_UNLOCK_GRANT
+        }
+        let activeOrders = s.activeOrders
+        if (
+          level >= ORDERS_UNLOCK_LEVEL &&
+          activeOrders.length === 0
+        ) {
+          activeOrders = pickOrders(level)
+        }
+        const missionFix = ensureActiveMission(
+          s.completedMissions,
+          level,
+          s.activeMissionId,
+        )
+        set({
+          xp: newXp,
+          unlocked,
+          seeds,
+          activeOrders,
+          activeMissionId: missionFix.activeMissionId,
+          missionProgress: missionFix.missionProgress,
+          tab: level >= TAVERN_UNLOCK_LEVEL ? 'adventure' : s.tab,
+          toast: `Dev boost: Level ${level}`,
+        })
+      },
     }),
     {
       name: SAVE_STORAGE_KEY,

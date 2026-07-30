@@ -1053,8 +1053,22 @@ html.theme-dark .ingredient-chip.need {
   margin-bottom: 14px;
 }
 
+.pane-tabs-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 .pane-tabs-3 {
   grid-template-columns: repeat(3, 1fr);
+}
+
+.pane-tabs-4 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (min-width: 420px) {
+  .pane-tabs-4 {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
 .pane-tabs button {
@@ -1074,6 +1088,16 @@ html.theme-dark .ingredient-chip.need {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
+}
+
+.gear-slots-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@media (max-width: 480px) {
+  .gear-slots-5 {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 
 .gear-slot {
@@ -1119,6 +1143,10 @@ html.theme-dark .ingredient-chip.need {
   border-color: var(--leaf);
   background: rgba(63, 122, 69, 0.18);
   color: var(--leaf-deep);
+}
+
+.pane-tabs button.has-active:not(.active) {
+  border-color: rgba(63, 122, 69, 0.45);
 }
 
 .party-pick {

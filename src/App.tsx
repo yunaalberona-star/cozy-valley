@@ -82,13 +82,14 @@ import {
   MAX_PLOTS,
   useGame,
 } from './game/store'
-import type {
-  AnimalTypeId,
-  CropId,
-  GearSlot,
-  ItemId,
-  MaterialId,
-  TabId,
+import {
+  GEAR_SLOT_ORDER,
+  type AnimalTypeId,
+  type CropId,
+  type GearSlot,
+  type ItemId,
+  type MaterialId,
+  type TabId,
 } from './game/types'
 import './App.css'
 
@@ -111,7 +112,6 @@ function formatLeft(ms: number) {
 
 const TABS: { id: TabId; label: string; emoji: string }[] = [
   { id: 'missions', label: 'Missions', emoji: '📜' },
-  { id: 'events', label: 'Events', emoji: '🎪' },
   { id: 'farm', label: 'Farm', emoji: '🌱' },
   { id: 'machines', label: 'Machines', emoji: '🏭' },
   { id: 'animals', label: 'Animals', emoji: '🐄' },
@@ -315,7 +315,7 @@ function GoalList({
   )
 }
 
-function MissionsView() {
+function StoryMissionsPane() {
   const xp = useGame((s) => s.xp)
   const activeMissionId = useGame((s) => s.activeMissionId)
   const missionProgress = useGame((s) => s.missionProgress)
@@ -336,12 +336,7 @@ function MissionsView() {
   const allComplete = completedMissions.length >= 50 && !mission
 
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <h2>Story Missions</h2>
-        <p>Chapter-based tasks for coins & XP — machines unlock as you level.</p>
-      </div>
-
+    <>
       {mission ? (
         <>
           <p className="chapter-label">
@@ -410,11 +405,11 @@ function MissionsView() {
           Completed: {completedMissions.length} / 50 missions
         </p>
       )}
-    </div>
+    </>
   )
 }
 
-function EventsView() {
+function EventsPane() {
   const now = useNow(1000)
   const activeEventId = useGame((s) => s.activeEventId)
   const eventEndsAt = useGame((s) => s.eventEndsAt)
@@ -439,12 +434,7 @@ function EventsView() {
     )
 
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <h2>Events</h2>
-        <p>Limited-time festivals with multi-stage rewards — like Family Farm Seaside.</p>
-      </div>
-
+    <>
       {event ? (
         <div className="recipe-card highlight">
           <div className="recipe-top">
@@ -547,6 +537,44 @@ function EventsView() {
           })}
         </div>
       )}
+    </>
+  )
+}
+
+function MissionsView() {
+  const [pane, setPane] = useState<'story' | 'events'>('story')
+  const activeEventId = useGame((s) => s.activeEventId)
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Missions</h2>
+        <p>Story chapters & limited-time events — machines unlock as you level.</p>
+      </div>
+
+      <div className="pane-tabs pane-tabs-2" role="tablist" aria-label="Mission areas">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'story'}
+          className={pane === 'story' ? 'active' : ''}
+          onClick={() => setPane('story')}
+        >
+          📜 Story
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'events'}
+          className={`${pane === 'events' ? 'active' : ''}${activeEventId ? ' has-active' : ''}`}
+          onClick={() => setPane('events')}
+        >
+          🎪 Events
+        </button>
+      </div>
+
+      {pane === 'story' && <StoryMissionsPane />}
+      {pane === 'events' && <EventsPane />}
     </div>
   )
 }
@@ -2056,6 +2084,51 @@ function BagView() {
   )
 }
 
+function RecruitCard({
+  recruitId,
+  busy,
+}: {
+  recruitId: string
+  busy: boolean
+}) {
+  const gearInventory = useGame((s) => s.gearInventory)
+  const recruitedNpcs = useGame((s) => s.recruitedNpcs)
+  const r = recruitedNpcs.find((n) => n.id === recruitId)
+  if (!r) return null
+  const def = NPCS[r.npcId]
+  if (!def) return null
+  const combat = npcCombatStats(r, gearInventory)
+  const effSkill = npcEffectiveSkill(r, def.skill, gearInventory)
+
+  return (
+    <div className="recipe-card recruit-card">
+      <div className="recipe-top">
+        <span className="big-emoji">{def.emoji}</span>
+        <div>
+          <strong>
+            {def.name} · {def.title}
+          </strong>
+          <p className="muted">
+            Skill {effSkill} (base {def.skill}
+            {combat.skillBonus > 0 ? ` + ${combat.skillBonus} gear` : ''}) · ⚔️{' '}
+            {combat.attack} 🛡️ {combat.defense} ❤️ {combat.hp}
+          </p>
+          <p className="muted">
+            {busy ? 'Exploring…' : 'Idle · tap gear slots to equip'}
+          </p>
+        </div>
+      </div>
+      {!busy && (
+        <div className="gear-slots gear-slots-5">
+          {GEAR_SLOT_ORDER.map((slot) => (
+            <GearSlotPicker key={slot} npcInstanceId={r.id} slot={slot} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function GearSlotPicker({
   npcInstanceId,
   slot,
@@ -2277,7 +2350,7 @@ function AdventureView() {
         <p>Recruit heroes, craft gear, send parties exploring.</p>
       </div>
 
-      <div className="pane-tabs pane-tabs-3" role="tablist" aria-label="Adventure areas">
+      <div className="pane-tabs pane-tabs-4" role="tablist" aria-label="Adventure areas">
         <button
           type="button"
           role="tab"
@@ -2286,6 +2359,15 @@ function AdventureView() {
           onClick={() => setAdventurePane('tavern')}
         >
           🍺 Tavern
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={adventurePane === 'recruits'}
+          className={adventurePane === 'recruits' ? 'active' : ''}
+          onClick={() => setAdventurePane('recruits')}
+        >
+          🧑‍🤝‍🧑 Recruits
         </button>
         <button
           type="button"
@@ -2310,68 +2392,22 @@ function AdventureView() {
       {adventurePane === 'tavern' && (
         <>
           <p className="muted pad">
-            Roster: {recruitedNpcs.length}/{MAX_RECRUITED_NPCS}
+            Hire heroes from the valley — they move to Recruits once hired (
+            {recruitedNpcs.length}/{MAX_RECRUITED_NPCS} roster).
           </p>
-          {recruitedNpcs.length > 0 && (
-            <>
-              <h3 className="section-label">Party & gear</h3>
-              <div className="card-list">
-                {recruitedNpcs.map((r) => {
-                  const def = NPCS[r.npcId]
-                  if (!def) return null
-                  const busy = !idle.some((n) => n.id === r.id)
-                  const combat = npcCombatStats(r, gearInventory)
-                  const effSkill = npcEffectiveSkill(
-                    r,
-                    def.skill,
-                    gearInventory,
-                  )
-                  return (
-                    <div key={r.id} className="recipe-card">
-                      <div className="recipe-top">
-                        <span className="big-emoji">{def.emoji}</span>
-                        <div>
-                          <strong>
-                            {def.name} · {def.title}
-                          </strong>
-                          <p className="muted">
-                            Skill {effSkill} (base {def.skill}
-                            {combat.skillBonus > 0
-                              ? ` + ${combat.skillBonus} gear`
-                              : ''}
-                            ) · ⚔️ {combat.attack} 🛡️ {combat.defense} ❤️{' '}
-                            {combat.hp}
-                          </p>
-                          <p className="muted">
-                            {busy ? 'Exploring…' : 'Idle · ready to equip'}
-                          </p>
-                        </div>
-                      </div>
-                      {!busy && (
-                        <div className="gear-slots">
-                          <GearSlotPicker npcInstanceId={r.id} slot="weapon" />
-                          <GearSlotPicker npcInstanceId={r.id} slot="armor" />
-                          <GearSlotPicker
-                            npcInstanceId={r.id}
-                            slot="accessory"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            </>
-          )}
           <h3 className="section-label">Available to recruit</h3>
-          <div className="card-list">
-            {NPC_LIST.map((npc) => {
-              const owned = recruitedNpcs.some((r) => r.npcId === npc.id)
-              return (
-                <div
-                  key={npc.id}
-                  className={`recipe-card ${owned ? 'locked' : ''}`}
-                >
+          {NPC_LIST.filter(
+            (npc) => !recruitedNpcs.some((r) => r.npcId === npc.id),
+          ).length === 0 ? (
+            <p className="muted pad">
+              No one left at the tavern — check Recruits or wait for new visitors.
+            </p>
+          ) : (
+            <div className="card-list">
+              {NPC_LIST.filter(
+                (npc) => !recruitedNpcs.some((r) => r.npcId === npc.id),
+              ).map((npc) => (
+                <div key={npc.id} className="recipe-card">
                   <div className="recipe-top">
                     <span className="big-emoji">{npc.emoji}</span>
                     <div>
@@ -2386,18 +2422,39 @@ function AdventureView() {
                     type="button"
                     className="btn full"
                     disabled={
-                      owned ||
                       coins < npc.hireCost ||
                       recruitedNpcs.length >= MAX_RECRUITED_NPCS
                     }
                     onClick={() => recruitNpc(npc.id)}
                   >
-                    {owned ? 'Recruited' : `Recruit · 🪙 ${npc.hireCost}`}
+                    Recruit · 🪙 {npc.hireCost}
                   </button>
                 </div>
-              )
-            })}
-          </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {adventurePane === 'recruits' && (
+        <>
+          <p className="muted pad">
+            Roster: {recruitedNpcs.length}/{MAX_RECRUITED_NPCS} · 5 gear slots each
+          </p>
+          {recruitedNpcs.length === 0 ? (
+            <p className="muted pad">
+              No recruits yet — visit the Tavern to hire your first hero.
+            </p>
+          ) : (
+            <div className="card-list">
+              {recruitedNpcs.map((r) => {
+                const busy = !idle.some((n) => n.id === r.id)
+                return (
+                  <RecruitCard key={r.id} recruitId={r.id} busy={busy} />
+                )
+              })}
+            </div>
+          )}
         </>
       )}
 
@@ -2728,7 +2785,6 @@ export default function App() {
         <TopBar />
         <main className="main">
           {tab === 'missions' && <MissionsView />}
-          {tab === 'events' && <EventsView />}
           {tab === 'farm' && <FarmView />}
           {tab === 'machines' && <MachinesView />}
           {tab === 'animals' && <AnimalsView />}

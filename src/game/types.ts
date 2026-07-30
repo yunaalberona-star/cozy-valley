@@ -85,7 +85,15 @@ export type CraftResourceId = ItemId | MaterialId
 
 export type GearBuildingId = 'valley_forge' | 'weavers_hut' | 'tinker_shed'
 
-export type GearSlot = 'weapon' | 'armor' | 'accessory'
+export type GearSlot = 'helmet' | 'armor' | 'weapon' | 'offhand' | 'accessory'
+
+export const GEAR_SLOT_ORDER: GearSlot[] = [
+  'helmet',
+  'armor',
+  'weapon',
+  'offhand',
+  'accessory',
+]
 
 export type GearQuality = 'rustic' | 'valley' | 'masterwork'
 
@@ -137,14 +145,15 @@ export type TabId =
   | 'machines'
   | 'animals'
   | 'missions'
-  | 'events'
   | 'orders'
   | 'market'
   | 'bag'
   | 'shop'
   | 'adventure'
 
-export type AdventurePaneId = 'tavern' | 'workshop' | 'lands'
+export type MissionPaneId = 'story' | 'events'
+
+export type AdventurePaneId = 'tavern' | 'recruits' | 'workshop' | 'lands'
 
 export type MissionGoalKind =
   | 'harvest'
