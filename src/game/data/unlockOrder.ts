@@ -1,6 +1,6 @@
 import { ANIMAL_BUILDINGS } from './animalBuildings'
 import { BUILDINGS, RECIPES } from './buildings'
-import type { AnimalBuildingDef, BuildingDef, BuildingId, ItemId, RecipeDef } from '../types'
+import type { AnimalBuildingDef, BuildingDef, BuildingId, CraftResourceId, ItemId, MaterialId, RecipeDef } from '../types'
 import { CROPS } from './crops'
 import { BUILDING_LEVEL_UNLOCKS } from './levelUnlocks'
 
@@ -13,13 +13,29 @@ const ANIMAL_PRODUCT_LEVEL: Partial<Record<ItemId, number>> = {
   bacon: 5,
 }
 
+const MATERIAL_LEVEL: Partial<Record<MaterialId, number>> = {
+  iron_ore: 13,
+  timber: 14,
+  leather_scrap: 15,
+  rabbit_pelt: 16,
+  cow_hide: 17,
+  sheep_leather: 19,
+  pig_leather: 21,
+  boar_leather: 21,
+  magic_essence: 15,
+  sunstone: 15,
+}
+
 function inputItemLevel(
-  id: ItemId,
+  id: CraftResourceId,
   craftedLevels: Partial<Record<ItemId, number>>,
 ): number {
+  if (id in MATERIAL_LEVEL) return MATERIAL_LEVEL[id as MaterialId] ?? 99
   if (id in CROPS) return CROPS[id as keyof typeof CROPS].unlockLevel
-  if (ANIMAL_PRODUCT_LEVEL[id] != null) return ANIMAL_PRODUCT_LEVEL[id]!
-  return craftedLevels[id] ?? 1
+  if (ANIMAL_PRODUCT_LEVEL[id as ItemId] != null) {
+    return ANIMAL_PRODUCT_LEVEL[id as ItemId]!
+  }
+  return craftedLevels[id as ItemId] ?? 1
 }
 
 function buildRecipeUnlockLevels(): Record<string, number> {
@@ -32,12 +48,14 @@ function buildRecipeUnlockLevels(): Record<string, number> {
       const need = Math.max(
         1,
         ...Object.keys(recipe.inputs).map((id) =>
-          inputItemLevel(id as ItemId, craftedLevels),
+          inputItemLevel(id as CraftResourceId, craftedLevels),
         ),
       )
       if ((byRecipe[recipe.id] ?? 0) < need) {
         byRecipe[recipe.id] = need
-        craftedLevels[recipe.output] = need
+        if (recipe.output) {
+          craftedLevels[recipe.output] = need
+        }
         changed = true
       }
     }

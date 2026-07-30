@@ -12,7 +12,13 @@ const ANIMAL_PROFIT_MULT = 1.4
 
 const MATERIAL_SELL: Record<MaterialId, number> = {
   iron_ore: 18,
+  timber: 12,
   leather_scrap: 15,
+  rabbit_pelt: 14,
+  cow_hide: 22,
+  pig_leather: 20,
+  sheep_leather: 21,
+  boar_leather: 23,
   magic_essence: 32,
   sunstone: 40,
 }
@@ -38,6 +44,7 @@ function buildItemSellPrices(): Record<ItemId, number> {
         0,
       )
       if (inputValue <= 0) continue
+      if (!recipe.output) continue
       const unit = Math.max(
         1,
         Math.ceil((inputValue * CRAFT_PROFIT_MULT) / recipe.outputQty),
@@ -49,7 +56,7 @@ function buildItemSellPrices(): Record<ItemId, number> {
     }
 
     for (const animal of Object.values(ANIMALS)) {
-      if (!animal.feedItem || !animal.feedQty) continue
+      if (!animal.product || !animal.feedItem || !animal.feedQty) continue
       const feedUnit = prices[animal.feedItem] ?? 0
       if (feedUnit <= 0) continue
       const feedCost = feedUnit * animal.feedQty

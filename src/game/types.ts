@@ -37,6 +37,7 @@ export type FeedId =
   | 'sheep_feed'
   | 'pig_slop'
   | 'bee_pollen'
+  | 'rabbit_feed'
 
 export type CraftedId =
   | 'flour'
@@ -72,10 +73,17 @@ export type CraftedId =
   | 'candy'
   | 'cake'
   | 'rope'
+  | 'rabbit_feed'
 
 export type MaterialId =
   | 'iron_ore'
+  | 'timber'
   | 'leather_scrap'
+  | 'rabbit_pelt'
+  | 'cow_hide'
+  | 'pig_leather'
+  | 'sheep_leather'
+  | 'boar_leather'
   | 'magic_essence'
   | 'sunstone'
 
@@ -83,7 +91,21 @@ export type ItemId = CropId | AnimalProductId | CraftedId
 
 export type CraftResourceId = ItemId | MaterialId
 
-export type GearBuildingId = 'valley_forge' | 'weavers_hut' | 'tinker_shed'
+export type GearBuildingId =
+  | 'smithy'
+  | 'tailor_workshop'
+  | 'wood_workshop'
+  | 'apothecary'
+  | 'wizard_tower'
+  | 'jewel_workshop'
+  | 'temple'
+  | 'master_lodge'
+  | 'engineer_bench'
+  | 'scholars_study'
+  | 'summoner_sanctum'
+  | 'bards_stage'
+  | 'veterans_quarter'
+  | 'storm_shrine'
 
 export type GearSlot = 'helmet' | 'armor' | 'weapon' | 'offhand' | 'accessory'
 
@@ -112,6 +134,9 @@ export type BuildingId =
   | 'winery'
   | 'candy_machine'
   | 'cake_machine'
+  | 'miner'
+  | 'wood_cutter'
+  | 'tannery'
 
 export type AnimalTypeId =
   | 'chicken'
@@ -121,6 +146,9 @@ export type AnimalTypeId =
   | 'pig'
   | 'goat'
   | 'duck'
+  | 'rabbit'
+  | 'bull'
+  | 'boar'
 
 export type AnimalBuildingId =
   | 'chicken_coop'
@@ -130,6 +158,9 @@ export type AnimalBuildingId =
   | 'sheep_pasture'
   | 'bee_apiary'
   | 'pig_sty'
+  | 'rabbit_hutch'
+  | 'bull_pen'
+  | 'boar_pen'
 
 export type UnlockId =
   | BuildingId
@@ -196,9 +227,10 @@ export interface RecipeDef {
   buildingId: BuildingId
   name: string
   emoji: string
-  output: ItemId
+  output?: ItemId
+  materialOutput?: MaterialId
   outputQty: number
-  inputs: Partial<Record<ItemId, number>>
+  inputs: Partial<Record<CraftResourceId, number>>
   craftMs: number
   xp: number
   /** Player level required; computed from ingredient unlock levels. */
@@ -227,7 +259,10 @@ export interface AnimalDef {
   buildingId: AnimalBuildingId
   name: string
   emoji: string
-  product: AnimalProductId
+  /** Goes to inventory when collected */
+  product?: AnimalProductId
+  /** Goes to materials when collected (leather hides) */
+  materialProduct?: MaterialId
   productQty: number
   produceMs: number
   buyCost: number
@@ -344,6 +379,8 @@ export interface NpcDef {
 export interface RecruitedNpc {
   id: string
   npcId: string
+  /** XP earned from adventures; level derived from this */
+  xp: number
 }
 
 export interface AdventureDef {
@@ -354,13 +391,19 @@ export interface AdventureDef {
   durationMs: number
   minNpcs: number
   maxNpcs: number
-  minSkill: number
+  /** Minimum total party power (attack + defense + hp + skill) */
+  minPower: number
   rewardCoins: number
   rewardXp: number
+  /** XP granted to each recruit in the party on completion */
+  recruitXp: number
   rewardItems?: Partial<Record<ItemId, number>>
   rewardMaterials?: Partial<Record<MaterialId, number>>
   unlockLevel: number
 }
+
+/** Max recruits that can join a single expedition */
+export const MAX_ADVENTURE_PARTY = 4
 
 export interface ActiveAdventure {
   id: string
@@ -377,6 +420,9 @@ export interface GearBuildingDef {
   blurb: string
   queueSize: number
   slotFocus: GearSlot
+  workerName: string
+  profession: string
+  tier: 'standard' | 'premium'
 }
 
 export interface GearStats {
@@ -404,6 +450,8 @@ export interface GearInstance {
   id: string
   blueprintId: string
   equippedBy: string | null
+  /** Gear level — stats scale with this */
+  level: number
 }
 
 export interface GearCraftJob {

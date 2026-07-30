@@ -46,6 +46,23 @@ export function migrateUnlockId(id: string): UnlockId | string {
     animal_pig: 'pig_sty',
     animal_goat: 'goat_pen',
     animal_duck: 'duck_pond',
+    valley_forge: 'smithy',
+    helmet_shop: 'tailor_workshop',
+    weavers_hut: 'tailor_workshop',
+    shieldwright: 'wood_workshop',
+    tinker_shed: 'jewel_workshop',
+  }
+  return map[id] ?? id
+}
+
+/** Map legacy gear workshop IDs in craft queues and UI selection. */
+export function migrateGearBuildingId(id: string): string {
+  const map: Record<string, string> = {
+    valley_forge: 'smithy',
+    helmet_shop: 'tailor_workshop',
+    weavers_hut: 'tailor_workshop',
+    shieldwright: 'wood_workshop',
+    tinker_shed: 'jewel_workshop',
   }
   return map[id] ?? id
 }

@@ -18,20 +18,20 @@ import { CROPS, SORTED_CROP_LIST, levelFromXp, xpProgress } from './game/data/cr
 import {
   ADVENTURES,
   adventuresForLevel,
+  MAX_ADVENTURE_PARTY,
+  scaledAdventure,
   TAVERN_UNLOCK_LEVEL,
 } from './game/data/adventures'
 import {
   blueprintsForBuilding,
   GEAR_BLUEPRINT_BY_ID,
-  GEAR_BUILDING_LIST,
   GEAR_BUILDINGS,
+  GEAR_BUILDINGS_PREMIUM,
+  GEAR_BUILDINGS_STANDARD,
   GEAR_SLOT_LABEL,
   gearForNpc,
   gearInstanceStats,
   MATERIAL_META,
-  npcCombatStats,
-  npcEffectiveSkill,
-  partyEffectiveSkill,
   QUALITY_LABEL,
   resourceMeta,
   scaledStats,
@@ -43,7 +43,14 @@ import {
   eventStageParentId,
   isMissionLevelGated,
 } from './game/data/missions'
+import { buildingUnlockLevel } from './game/data/levelUnlocks'
 import { MAX_RECRUITED_NPCS, NPC_LIST, NPCS } from './game/data/npcs'
+import {
+  npcPower,
+  npcTotalStats,
+  partyPower,
+  recruitXpProgress,
+} from './game/data/recruits'
 import { ORDERS } from './game/data/orders'
 import {
   MARKET_UNLOCK_LEVEL,
@@ -86,6 +93,8 @@ import {
   GEAR_SLOT_ORDER,
   type AnimalTypeId,
   type CropId,
+  type CraftResourceId,
+  type GearBuildingDef,
   type GearSlot,
   type ItemId,
   type MaterialId,
@@ -321,7 +330,6 @@ function StoryMissionsPane() {
   const missionProgress = useGame((s) => s.missionProgress)
   const completedMissions = useGame((s) => s.completedMissions)
   const claimMission = useGame((s) => s.claimMission)
-  const unlocked = useGame((s) => s.unlocked)
   const playerLevel = levelFromXp(xp)
 
   const mission = activeMissionId ? MISSION_BY_ID[activeMissionId] : null
@@ -387,18 +395,6 @@ function StoryMissionsPane() {
       ) : (
         <p className="muted pad">Loading missions…</p>
       )}
-
-      <h3 className="section-label">Unlocked so far</h3>
-      <div className="chip-wrap">
-        {unlocked.length === 0 && (
-          <span className="muted">Nothing yet — finish First Sprouts.</span>
-        )}
-        {unlocked.map((u) => (
-          <span key={u} className="unlock-chip">
-            {unlockLabel(u)}
-          </span>
-        ))}
-      </div>
 
       {completedMissions.length > 0 && (
         <p className="muted pad small">
@@ -688,21 +684,28 @@ function FarmView() {
 function IngredientBar({
   items,
   inventory,
+  materials = {},
   onNeedItem,
   label = 'Required items',
   compact = false,
 }: {
-  items: { id: ItemId; qty: number }[]
+  items: { id: CraftResourceId; qty: number }[]
   inventory: Partial<Record<ItemId, number>>
+  materials?: Partial<Record<MaterialId, number>>
   onNeedItem: (id: ItemId, qty: number) => void
   label?: string | false
   compact?: boolean
 }) {
   if (items.length === 0) return null
 
+  const haveQty = (id: CraftResourceId) =>
+    id in MATERIAL_META
+      ? (materials[id as MaterialId] ?? 0)
+      : (inventory[id as ItemId] ?? 0)
+
   const sorted = [...items].sort((a, b) => {
-    const aOk = (inventory[a.id] ?? 0) >= a.qty
-    const bOk = (inventory[b.id] ?? 0) >= b.qty
+    const aOk = haveQty(a.id) >= a.qty
+    const bOk = haveQty(b.id) >= b.qty
     if (aOk === bOk) return a.id.localeCompare(b.id)
     return aOk ? 1 : -1
   })
@@ -712,21 +715,22 @@ function IngredientBar({
       {label !== false && <p className="ingredient-bar-label">{label}</p>}
       <div className="ingredient-chips" role="list">
         {sorted.map(({ id, qty }) => {
-          const meta = ITEM_META[id]
-          const have = inventory[id] ?? 0
+          const meta = resourceMeta(id)
+          const have = haveQty(id)
           const ok = have >= qty
+          const isMaterial = id in MATERIAL_META
           return (
             <button
               key={id}
               type="button"
               role="listitem"
               className={`ingredient-chip ${ok ? 'ok' : 'need'}`}
-              disabled={ok}
-              onClick={() => onNeedItem(id, qty)}
+              disabled={ok || isMaterial}
+              onClick={() => !isMaterial && onNeedItem(id as ItemId, qty)}
               title={
                 ok
                   ? `${meta.name}: ${have}/${qty} ready`
-                  : `${meta.name}: need ${qty} (have ${have}) — tap to find`
+                  : `${meta.name}: need ${qty} (have ${have})${isMaterial ? '' : ' — tap to find'}`
               }
             >
               <span>{meta.emoji}</span>
@@ -753,6 +757,7 @@ function MachinesView() {
   const machineScrollTarget = useGame((s) => s.machineScrollTarget)
   const clearMachineScrollTarget = useGame((s) => s.clearMachineScrollTarget)
   const inventory = useGame((s) => s.inventory)
+  const materials = useGame((s) => s.materials)
   const craftQueue = useGame((s) => s.craftQueue)
   const selectedBuilding = useGame((s) => s.selectedBuilding)
   const selectBuilding = useGame((s) => s.selectBuilding)
@@ -952,15 +957,19 @@ function MachinesView() {
           <div className="card-list">
             {recipes.map((recipe) => {
               const recipeLocked = !isRecipeUnlocked(recipe.id, level)
-              const missing = Object.entries(recipe.inputs).some(
-                ([id, qty]) => (inventory[id as ItemId] ?? 0) < (qty ?? 0),
-              )
+              const missing = Object.entries(recipe.inputs).some(([id, qty]) => {
+                const need = qty ?? 0
+                if (id in MATERIAL_META) {
+                  return (materials[id as MaterialId] ?? 0) < need
+                }
+                return (inventory[id as ItemId] ?? 0) < need
+              })
               const queueFull = queue.length >= queueCap
               return (
                 <div
                   key={recipe.id}
                   id={`machine-recipe-${recipe.id}`}
-                  className={`recipe-card ${recipeLocked ? 'locked' : ''} ${machineScrollTarget === recipe.id || guideItemHighlights.includes(recipe.id) || guideItemHighlights.includes(recipe.output) ? 'guide-pulse-frame' : ''}`}
+                  className={`recipe-card ${recipeLocked ? 'locked' : ''} ${machineScrollTarget === recipe.id || guideItemHighlights.includes(recipe.id) || (recipe.output && guideItemHighlights.includes(recipe.output)) ? 'guide-pulse-frame' : ''}`}
                 >
                   <div className="recipe-top">
                     <span className="big-emoji">{recipe.emoji}</span>
@@ -975,10 +984,11 @@ function MachinesView() {
                   </div>
                   <IngredientBar
                     items={Object.entries(recipe.inputs).map(([id, qty]) => ({
-                      id: id as ItemId,
+                      id: id as CraftResourceId,
                       qty: qty ?? 0,
                     }))}
                     inventory={inventory}
+                    materials={materials}
                     onNeedItem={navigateToItem}
                     label={false}
                     compact
@@ -1055,7 +1065,13 @@ function AnimalsView() {
                 <small>
                   {locked
                     ? '🔒 Mission lock'
-                    : `${count}/${animalDef.maxOwned} ${animalDef.name}s · ${ITEM_META[animalDef.product].emoji} ${ITEM_META[animalDef.product].name}`}
+                    : `${count}/${animalDef.maxOwned} ${animalDef.name}s · ${
+                        animalDef.materialProduct
+                          ? `${MATERIAL_META[animalDef.materialProduct].emoji} ${MATERIAL_META[animalDef.materialProduct].name}`
+                          : animalDef.product
+                            ? `${ITEM_META[animalDef.product].emoji} ${ITEM_META[animalDef.product].name}`
+                            : '—'
+                      }`}
                 </small>
               </button>
             )
@@ -1093,8 +1109,12 @@ function AnimalsView() {
               <div>
                 <strong>{def.name}</strong>
                 <p className="muted">
-                  {ITEM_META[def.product].emoji} {ITEM_META[def.product].name} ·{' '}
-                  {owned.length}/{def.maxOwned} owned
+                  {def.materialProduct
+                    ? `${MATERIAL_META[def.materialProduct].emoji} ${MATERIAL_META[def.materialProduct].name}`
+                    : def.product
+                      ? `${ITEM_META[def.product].emoji} ${ITEM_META[def.product].name}`
+                      : '—'}{' '}
+                  · {owned.length}/{def.maxOwned} owned
                 </p>
                 {def.feedItem && (
                   <p className="muted">
@@ -2093,12 +2113,25 @@ function RecruitCard({
 }) {
   const gearInventory = useGame((s) => s.gearInventory)
   const recruitedNpcs = useGame((s) => s.recruitedNpcs)
+  const equipGear = useGame((s) => s.equipGear)
+  const unequipGear = useGame((s) => s.unequipGear)
+  const [activeSlot, setActiveSlot] = useState<GearSlot | null>(null)
   const r = recruitedNpcs.find((n) => n.id === recruitId)
   if (!r) return null
   const def = NPCS[r.npcId]
   if (!def) return null
-  const combat = npcCombatStats(r, gearInventory)
-  const effSkill = npcEffectiveSkill(r, def.skill, gearInventory)
+  const stats = npcTotalStats(r, gearInventory)
+  const xpInfo = recruitXpProgress(r.xp)
+  const equippedForSlot = (slot: GearSlot) =>
+    gearForNpc(r.id, gearInventory).find(
+      (g) => GEAR_BLUEPRINT_BY_ID[g.blueprintId]?.slot === slot,
+    )
+  const availableForSlot = (slot: GearSlot) =>
+    gearInventory.filter(
+      (g) =>
+        !g.equippedBy &&
+        GEAR_BLUEPRINT_BY_ID[g.blueprintId]?.slot === slot,
+    )
 
   return (
     <div className="recipe-card recruit-card">
@@ -2106,83 +2139,101 @@ function RecruitCard({
         <span className="big-emoji">{def.emoji}</span>
         <div>
           <strong>
-            {def.name} · {def.title}
+            {def.name} · Lv {xpInfo.level}
           </strong>
           <p className="muted">
-            Skill {effSkill} (base {def.skill}
-            {combat.skillBonus > 0 ? ` + ${combat.skillBonus} gear` : ''}) · ⚔️{' '}
-            {combat.attack} 🛡️ {combat.defense} ❤️ {combat.hp}
+            {def.title} · Skill {stats.skill} · ⚔️ {stats.attack} 🛡️{' '}
+            {stats.defense} ❤️ {stats.hp}
           </p>
-          <p className="muted">
-            {busy ? 'Exploring…' : 'Idle · tap gear slots to equip'}
+          <div className="mini-track recruit-xp-bar">
+            <div style={{ width: `${xpInfo.pct}%` }} />
+          </div>
+          <p className="muted small">
+            {busy
+              ? 'Exploring…'
+              : `${xpInfo.toNext} XP to Lv ${xpInfo.level + 1} · tap a slot to equip`}
           </p>
         </div>
       </div>
       {!busy && (
-        <div className="gear-slots gear-slots-5">
-          {GEAR_SLOT_ORDER.map((slot) => (
-            <GearSlotPicker key={slot} npcInstanceId={r.id} slot={slot} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function GearSlotPicker({
-  npcInstanceId,
-  slot,
-}: {
-  npcInstanceId: string
-  slot: GearSlot
-}) {
-  const gearInventory = useGame((s) => s.gearInventory)
-  const equipGear = useGame((s) => s.equipGear)
-  const unequipGear = useGame((s) => s.unequipGear)
-  const equipped = gearForNpc(npcInstanceId, gearInventory).find(
-    (g) => GEAR_BLUEPRINT_BY_ID[g.blueprintId]?.slot === slot,
-  )
-  const bp = equipped ? GEAR_BLUEPRINT_BY_ID[equipped.blueprintId] : null
-  const available = gearInventory.filter(
-    (g) =>
-      !g.equippedBy &&
-      GEAR_BLUEPRINT_BY_ID[g.blueprintId]?.slot === slot,
-  )
-
-  return (
-    <div className="gear-slot">
-      <small className="gear-slot-label">{GEAR_SLOT_LABEL[slot]}</small>
-      {equipped && bp ? (
-        <button
-          type="button"
-          className="gear-slot-btn filled"
-          onClick={() => unequipGear(equipped.id)}
-          title="Tap to unequip"
-        >
-          <span>{bp.emoji}</span>
-        </button>
-      ) : (
-        <span className="gear-slot-btn empty">+</span>
-      )}
-      {available.length > 0 && (
-        <div className="gear-slot-options">
-          {available.map((g) => {
-            const opt = GEAR_BLUEPRINT_BY_ID[g.blueprintId]
-            if (!opt) return null
-            const st = gearInstanceStats(g)
-            return (
-              <button
-                key={g.id}
-                type="button"
-                className="btn tiny"
-                onClick={() => equipGear(g.id, npcInstanceId)}
-                title={`${opt.name} · skill +${st.skillBonus}`}
-              >
-                {opt.emoji}
-              </button>
-            )
-          })}
-        </div>
+        <>
+          <div className="gear-slots gear-slots-5">
+            {GEAR_SLOT_ORDER.map((slot) => {
+              const equipped = equippedForSlot(slot)
+              const bp = equipped
+                ? GEAR_BLUEPRINT_BY_ID[equipped.blueprintId]
+                : null
+              const isActive = activeSlot === slot
+              return (
+                <button
+                  key={slot}
+                  type="button"
+                  className={`gear-slot ${isActive ? 'active' : ''}`}
+                  onClick={() =>
+                    setActiveSlot(isActive ? null : slot)
+                  }
+                >
+                  <small className="gear-slot-label">{GEAR_SLOT_LABEL[slot]}</small>
+                  <span
+                    className={`gear-slot-btn ${equipped ? 'filled' : 'empty'}`}
+                  >
+                    {bp ? bp.emoji : '+'}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          {activeSlot && (
+            <div className="gear-pick-row">
+              <small className="gear-pick-label">
+                {GEAR_SLOT_LABEL[activeSlot]}
+              </small>
+              <div className="gear-pick-scroll">
+                {equippedForSlot(activeSlot) && (
+                  <button
+                    type="button"
+                    className="gear-pick-chip unequip"
+                    onClick={() => {
+                      unequipGear(equippedForSlot(activeSlot)!.id)
+                      setActiveSlot(null)
+                    }}
+                  >
+                    ✕ Unequip
+                  </button>
+                )}
+                {availableForSlot(activeSlot).length === 0 &&
+                  !equippedForSlot(activeSlot) && (
+                    <span className="muted small gear-pick-empty">
+                      No gear for this slot — craft in Workshop
+                    </span>
+                  )}
+                {availableForSlot(activeSlot).map((g) => {
+                  const opt = GEAR_BLUEPRINT_BY_ID[g.blueprintId]
+                  if (!opt) return null
+                  const st = gearInstanceStats(g)
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      className="gear-pick-chip"
+                      onClick={() => {
+                        equipGear(g.id, r.id)
+                        setActiveSlot(null)
+                      }}
+                      title={`${opt.name} · skill +${st.skillBonus}`}
+                    >
+                      <span className="gear-pick-emoji">{opt.emoji}</span>
+                      <span className="gear-pick-meta">
+                        <strong>{opt.name}</strong>
+                        <small>Lv {g.level}</small>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -2245,6 +2296,39 @@ function ShopView() {
         })}
       </div>
     </div>
+  )
+}
+
+function WorkshopCard({
+  building,
+  locked,
+  unlockLevel,
+  highlighted,
+  onSelect,
+}: {
+  building: GearBuildingDef
+  locked: boolean
+  unlockLevel: number
+  highlighted: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className={`machine-card ${locked ? 'locked' : ''} ${!locked && highlighted ? 'guide-pulse-frame' : ''}`}
+      disabled={locked}
+      onClick={onSelect}
+    >
+      <span className="big-emoji">{building.emoji}</span>
+      <strong>{building.name}</strong>
+      <small className="muted">
+        {building.workerName} · {building.profession}
+        {building.tier === 'premium' ? ' · Premium' : ''}
+      </small>
+      <small>
+        {locked ? `🔒 Level ${unlockLevel}` : building.blurb}
+      </small>
+    </button>
   )
 }
 
@@ -2334,8 +2418,11 @@ function AdventureView() {
           <div className="recipe-top">
             <span className="big-emoji">⚒️</span>
             <div>
-              <strong>Gear Workshop</strong>
-              <p className="muted">Craft weapons, armor & charms like a cozy titan.</p>
+              <strong>Gear Workshops</strong>
+              <p className="muted">
+                Fourteen artisan workshops unlock as you level — each run by a
+                specialist crafter like Shop Titans.
+              </p>
             </div>
           </div>
         </div>
@@ -2460,25 +2547,39 @@ function AdventureView() {
 
       {adventurePane === 'workshop' && (
         <>
+          <p className="muted pad">
+            Fourteen artisan workshops — each run by a specialist crafter. Unlock
+            more as you level up.
+          </p>
           {!gearOpen && (
-            <div className="machine-grid">
-              {GEAR_BUILDING_LIST.map((b) => {
-                const locked = !unlocked.includes(b.id)
-                return (
-                  <button
+            <>
+              <h3 className="section-label">Standard Workshops</h3>
+              <div className="machine-grid">
+                {GEAR_BUILDINGS_STANDARD.map((b) => (
+                  <WorkshopCard
                     key={b.id}
-                    type="button"
-                    className={`machine-card ${locked ? 'locked' : ''} ${!locked && guideItemHighlights.includes(b.id) ? 'guide-pulse-frame' : ''}`}
-                    disabled={locked}
-                    onClick={() => selectGearBuilding(b.id)}
-                  >
-                    <span className="big-emoji">{b.emoji}</span>
-                    <strong>{b.name}</strong>
-                    <small>{locked ? '🔒 Level 15' : b.blurb}</small>
-                  </button>
-                )
-              })}
-            </div>
+                    building={b}
+                    locked={!unlocked.includes(b.id)}
+                    unlockLevel={buildingUnlockLevel(b.id)}
+                    highlighted={guideItemHighlights.includes(b.id)}
+                    onSelect={() => selectGearBuilding(b.id)}
+                  />
+                ))}
+              </div>
+              <h3 className="section-label">Premium Workshops</h3>
+              <div className="machine-grid">
+                {GEAR_BUILDINGS_PREMIUM.map((b) => (
+                  <WorkshopCard
+                    key={b.id}
+                    building={b}
+                    locked={!unlocked.includes(b.id)}
+                    unlockLevel={buildingUnlockLevel(b.id)}
+                    highlighted={guideItemHighlights.includes(b.id)}
+                    onSelect={() => selectGearBuilding(b.id)}
+                  />
+                ))}
+              </div>
+            </>
           )}
 
           {gearOpen && gearBuilding && (
@@ -2494,6 +2595,10 @@ function AdventureView() {
                 <h2>
                   {gearBuilding.emoji} {gearBuilding.name}
                 </h2>
+                <p>
+                  {gearBuilding.workerName} · {gearBuilding.profession}
+                  {gearBuilding.tier === 'premium' ? ' · Premium' : ''}
+                </p>
                 <p>{gearBuilding.blurb}</p>
               </div>
 
@@ -2649,18 +2754,14 @@ function AdventureView() {
           <div className="card-list">
             {ADVENTURES.map((adv) => {
               const locked = level < adv.unlockLevel
+              const scaled = scaledAdventure(adv, level)
               const picked = partyPick[adv.id] ?? []
-              const skill = partyEffectiveSkill(
-                picked,
-                recruitedNpcs,
-                gearInventory,
-                (npcId) => NPCS[npcId]?.skill ?? 0,
-              )
+              const power = partyPower(picked, recruitedNpcs, gearInventory)
               const canSend =
                 !locked &&
                 picked.length >= adv.minNpcs &&
                 picked.length <= adv.maxNpcs &&
-                skill >= adv.minSkill
+                power >= scaled.minPower
               return (
                 <div
                   key={adv.id}
@@ -2674,18 +2775,19 @@ function AdventureView() {
                       <p className="muted">
                         {locked
                           ? `🔒 Level ${adv.unlockLevel}`
-                          : `${formatLeft(adv.durationMs)} · ${adv.minNpcs}–${adv.maxNpcs} recruits · skill ${adv.minSkill}+`}
+                          : `${formatLeft(adv.durationMs)} · ${adv.minNpcs}–${MAX_ADVENTURE_PARTY} recruits · power ${scaled.minPower}+`}
                       </p>
                       <p className="muted">
-                        🪙 {adv.rewardCoins} · +{adv.rewardXp} XP
+                        🪙 {scaled.rewardCoins} · +{scaled.rewardXp} player XP ·
+                        +{scaled.recruitXp} recruit XP
                       </p>
                     </div>
                   </div>
                   {!locked && (
                     <>
                       <p className="muted small">
-                        Pick party ({picked.length}/{adv.maxNpcs}) · skill{' '}
-                        {skill}/{adv.minSkill}
+                        Pick party ({picked.length}/{MAX_ADVENTURE_PARTY}) · power{' '}
+                        {power}/{scaled.minPower}
                       </p>
                       <div className="party-pick">
                         {idle.length === 0 && (
@@ -2695,11 +2797,8 @@ function AdventureView() {
                           const def = NPCS[r.npcId]
                           if (!def) return null
                           const active = picked.includes(r.id)
-                          const eff = npcEffectiveSkill(
-                            r,
-                            def.skill,
-                            gearInventory,
-                          )
+                          const pwr = npcPower(r, gearInventory)
+                          const rlv = recruitXpProgress(r.xp).level
                           return (
                             <button
                               key={r.id}
@@ -2709,8 +2808,10 @@ function AdventureView() {
                             >
                               <span className="seed-emoji">{def.emoji}</span>
                               <span className="seed-meta">
-                                <strong>{def.name}</strong>
-                                <small>Skill {eff}</small>
+                                <strong>
+                                  {def.name} Lv {rlv}
+                                </strong>
+                                <small>Power {pwr}</small>
                               </span>
                             </button>
                           )

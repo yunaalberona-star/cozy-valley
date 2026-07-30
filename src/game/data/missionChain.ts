@@ -298,10 +298,10 @@ function goalsForMission(n: number): MissionGoal[] {
     return goals
   }
   if (mode === 1) {
-    return [
-      goalBuy(animal, 1),
-      goalCollect(product, collectAmt),
-    ]
+    const goals: MissionGoal[] = [goalBuy(animal, 1)]
+    if (product) goals.push(goalCollect(product, collectAmt))
+    else goals.push(goalOrder(orderAmt))
+    return goals
   }
   const goals: MissionGoal[] = [goalHarvest(crop.id, harvestAmt)]
   if (craft) goals.push(goalCraft(craft, craftAmt))

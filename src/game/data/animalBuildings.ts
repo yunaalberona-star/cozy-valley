@@ -51,6 +51,27 @@ export const ANIMAL_BUILDINGS: Record<AnimalBuildingId, AnimalBuildingDef> = {
     blurb: 'Happy pigs mean savory bacon.',
     animalTypeId: 'pig',
   },
+  rabbit_hutch: {
+    id: 'rabbit_hutch',
+    name: 'Rabbit Hutch',
+    emoji: '🐰',
+    blurb: 'Soft pelts for light valley gear.',
+    animalTypeId: 'rabbit',
+  },
+  bull_pen: {
+    id: 'bull_pen',
+    name: 'Bull Pen',
+    emoji: '🐂',
+    blurb: 'Sturdy bulls yield thick cow hide.',
+    animalTypeId: 'bull',
+  },
+  boar_pen: {
+    id: 'boar_pen',
+    name: 'Boar Pen',
+    emoji: '🐗',
+    blurb: 'Wild boars drop tough leather.',
+    animalTypeId: 'boar',
+  },
 }
 
 export const ANIMAL_BUILDING_LIST = Object.values(ANIMAL_BUILDINGS)

@@ -310,6 +310,11 @@ button {
   overflow: hidden;
 }
 
+.recruit-xp-bar {
+  margin: 6px 0 4px;
+  max-width: 160px;
+}
+
 .xp-fill,
 .mini-track > div,
 .plot-bar > span {
@@ -1105,6 +1110,95 @@ html.theme-dark .ingredient-chip.need {
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.gear-slot.active .gear-slot-btn {
+  border-color: var(--leaf-deep);
+  box-shadow: 0 0 0 2px rgba(63, 122, 69, 0.25);
+}
+
+.gear-pick-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(47, 94, 53, 0.12);
+}
+
+.gear-pick-label {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.gear-pick-scroll {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.gear-pick-chip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(63, 122, 69, 0.35);
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  min-width: 0;
+}
+
+.gear-pick-chip:hover {
+  border-color: var(--leaf);
+  background: rgba(63, 122, 69, 0.08);
+}
+
+.gear-pick-chip.unequip {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.gear-pick-emoji {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.gear-pick-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+
+.gear-pick-meta strong {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.gear-pick-meta small {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.gear-pick-empty {
+  padding: 8px 0;
+  white-space: nowrap;
 }
 
 .gear-slot-label {
@@ -1129,14 +1223,6 @@ html.theme-dark .ingredient-chip.need {
   border-style: solid;
   border-color: var(--leaf);
   background: rgba(63, 122, 69, 0.12);
-  cursor: pointer;
-}
-
-.gear-slot-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  justify-content: center;
 }
 
 .pane-tabs button.active {

@@ -2,7 +2,12 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { ANIMALS } from './data/animals'
 import { ANIMAL_BUILDINGS } from './data/animalBuildings'
-import { ADVENTURE_BY_ID, TAVERN_UNLOCK_LEVEL } from './data/adventures'
+import { ADVENTURE_BY_ID, scaledAdventure, TAVERN_UNLOCK_LEVEL } from './data/adventures'
+import {
+  rollAdventureGear,
+  rollGearDropCount,
+  rollRareMaterialDrops,
+} from './data/adventureLoot'
 import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
 import { CROPS, cropsCrossingLevels, levelFromXp, xpToReachLevel } from './data/crops'
 import {
@@ -16,7 +21,6 @@ import {
   GEAR_BLUEPRINT_BY_ID,
   GEAR_BUILDINGS,
   MATERIAL_META,
-  partyEffectiveSkill,
 } from './data/gear'
 import {
   EVENT_BY_ID,
@@ -29,8 +33,9 @@ import {
   resolveActiveMission,
 } from './data/missions'
 import { LEGACY_MISSION_ID_MAP } from './data/missionChain'
-import { unlocksCrossingLevels, unlocksForLevel } from './data/levelUnlocks'
+import { buildingUnlockLevel, unlocksCrossingLevels, unlocksForLevel } from './data/levelUnlocks'
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
+import { grantRecruitXp, partyPower } from './data/recruits'
 import { ORDERS } from './data/orders'
 import { itemSellPrice, materialSellPrice, seedSellPrice } from './data/sellPrices'
 import { MARKET_UNLOCK_LEVEL, isValidMarketPrice } from './data/market'
@@ -53,7 +58,7 @@ import {
   SAVE_STORAGE_KEY,
   SAVE_VERSION,
 } from './saveStorage'
-import { migrateUnlockId, unlockMeta } from './unlocks'
+import { migrateUnlockId, migrateGearBuildingId, unlockMeta } from './unlocks'
 import type {
   ActiveAdventure,
   ActiveOrder,
@@ -209,7 +214,18 @@ function addMaterials(
 }
 
 function isMaterialId(id: string): id is MaterialId {
-  return ['iron_ore', 'leather_scrap', 'magic_essence', 'sunstone'].includes(id)
+  return [
+    'iron_ore',
+    'timber',
+    'leather_scrap',
+    'rabbit_pelt',
+    'cow_hide',
+    'pig_leather',
+    'sheep_leather',
+    'boar_leather',
+    'magic_essence',
+    'sunstone',
+  ].includes(id)
 }
 
 function hasResources(
@@ -415,23 +431,6 @@ function syncLevelUnlocks(xp: number, unlocked: UnlockId[]): UnlockId[] {
 
 function busyNpcIds(activeAdventures: ActiveAdventure[]): Set<string> {
   return new Set(activeAdventures.flatMap((a) => a.npcInstanceIds))
-}
-
-function baseNpcSkill(npcId: string): number {
-  return NPCS[npcId]?.skill ?? 0
-}
-
-function partySkill(
-  npcInstanceIds: string[],
-  recruited: RecruitedNpc[],
-  gearInventory: GearInstance[],
-): number {
-  return partyEffectiveSkill(
-    npcInstanceIds,
-    recruited,
-    gearInventory,
-    baseNpcSkill,
-  )
 }
 
 function unlockPopup(
@@ -764,6 +763,38 @@ function migrateSaveState(
         state.eventProgress = {}
         state.eventStageIndex = 0
       }
+    }
+  }
+  if (version < 11) {
+    if (Array.isArray(state.unlocked)) {
+      state.unlocked = migrateUnlocked(state.unlocked as string[])
+    }
+    if (state.selectedGearBuilding && typeof state.selectedGearBuilding === 'string') {
+      state.selectedGearBuilding = migrateGearBuildingId(
+        state.selectedGearBuilding,
+      )
+    }
+    if (Array.isArray(state.gearCraftQueue)) {
+      state.gearCraftQueue = (state.gearCraftQueue as GearCraftJob[]).map(
+        (job) => ({
+          ...job,
+          buildingId: migrateGearBuildingId(job.buildingId) as GearBuildingId,
+        }),
+      )
+    }
+  }
+  if (version < 12) {
+    if (Array.isArray(state.recruitedNpcs)) {
+      state.recruitedNpcs = (state.recruitedNpcs as RecruitedNpc[]).map((r) => ({
+        ...r,
+        xp: typeof r.xp === 'number' ? r.xp : 0,
+      }))
+    }
+    if (Array.isArray(state.gearInventory)) {
+      state.gearInventory = (state.gearInventory as GearInstance[]).map((g) => ({
+        ...g,
+        level: typeof g.level === 'number' ? g.level : 1,
+      }))
     }
   }
   return state
@@ -1420,14 +1451,16 @@ export const useGame = create<GameState>()(
           set({ toast: `${building.name} queue full (${queueCap} slots)` })
           return
         }
-        if (!hasItems(s.inventory, recipe.inputs)) {
+        if (!hasResources(s.inventory, s.materials, recipe.inputs)) {
           set({ toast: 'Missing ingredients' })
           return
         }
         const now = Date.now()
+        const taken = takeResources(s.inventory, s.materials, recipe.inputs)
         set((s) =>
           withMissionProgress(s, {
-            inventory: takeItems(s.inventory, recipe.inputs),
+            inventory: taken.inventory,
+            materials: taken.materials,
             craftQueue: [
               ...s.craftQueue,
               {
@@ -1462,9 +1495,23 @@ export const useGame = create<GameState>()(
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        const outputLabel = recipe.materialOutput
+          ? MATERIAL_META[recipe.materialOutput].name
+          : recipe.output
+            ? ITEM_META[recipe.output].name
+            : 'item'
         set({
           craftQueue,
-          inventory: addItem(s.inventory, recipe.output, recipe.outputQty),
+          inventory: recipe.output
+            ? addItem(s.inventory, recipe.output, recipe.outputQty)
+            : s.inventory,
+          materials: recipe.materialOutput
+            ? addMaterial(
+                s.materials,
+                recipe.materialOutput,
+                recipe.outputQty,
+              )
+            : s.materials,
           xp: xpResult.xp,
           seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
@@ -1472,9 +1519,11 @@ export const useGame = create<GameState>()(
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          toast: `Collected ${recipe.name}`,
+          toast: `Collected ${recipe.outputQty}× ${outputLabel}`,
         })
-        get().track('craft', recipe.output, recipe.outputQty)
+        if (recipe.output) {
+          get().track('craft', recipe.output, recipe.outputQty)
+        }
       },
 
       purchaseBuilding: (id) => {
@@ -1614,8 +1663,20 @@ export const useGame = create<GameState>()(
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        const mat = def.materialProduct
+        const good = def.product
+        const label = mat
+          ? MATERIAL_META[mat].name
+          : good
+            ? ITEM_META[good].name
+            : 'goods'
         set({
-          inventory: addItem(s.inventory, def.product, def.productQty),
+          inventory: good
+            ? addItem(s.inventory, good, def.productQty)
+            : s.inventory,
+          materials: mat
+            ? addMaterial(s.materials, mat, def.productQty)
+            : s.materials,
           xp: xpResult.xp,
           seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
@@ -1628,9 +1689,9 @@ export const useGame = create<GameState>()(
               ? { ...a, startedAt: needsFeed ? null : Date.now() }
               : a,
           ),
-          toast: `Collected ${def.productQty}× ${ITEM_META[def.product].name}`,
+          toast: `Collected ${def.productQty}× ${label}`,
         })
-        get().track('collect_animal', def.product, def.productQty)
+        get().track('collect_animal', mat ?? good ?? def.id, def.productQty)
       },
 
       fulfillOrder: (slot) => {
@@ -2121,7 +2182,7 @@ export const useGame = create<GameState>()(
           set({ toast: `Need ${def.hireCost} coins to recruit ${def.name}` })
           return
         }
-        const recruit: RecruitedNpc = { id: uid(), npcId }
+        const recruit: RecruitedNpc = { id: uid(), npcId, xp: 0 }
         set({
           coins: s.coins - def.hireCost,
           recruitedNpcs: [...s.recruitedNpcs, recruit],
@@ -2163,10 +2224,11 @@ export const useGame = create<GameState>()(
           set({ toast: 'Invalid party selection' })
           return
         }
-        const skill = partySkill(npcInstanceIds, s.recruitedNpcs, s.gearInventory)
-        if (skill < adventure.minSkill) {
+        const scaled = scaledAdventure(adventure, level)
+        const power = partyPower(npcInstanceIds, s.recruitedNpcs, s.gearInventory)
+        if (power < scaled.minPower) {
           set({
-            toast: `Party skill too low (need ${adventure.minSkill}, have ${skill})`,
+            toast: `Party power too low (need ${scaled.minPower}, have ${power})`,
           })
           return
         }
@@ -2190,9 +2252,11 @@ export const useGame = create<GameState>()(
         if (!job || Date.now() < job.doneAt) return
         const adventure = ADVENTURE_BY_ID[job.adventureId]
         if (!adventure) return
+        const playerLevel = levelFromXp(s.xp)
+        const scaled = scaledAdventure(adventure, playerLevel)
         const xpResult = applyXpGain(
           s.xp,
-          adventure.rewardXp,
+          scaled.rewardXp,
           s.popupQueue,
           s.unlocked,
           s.activeOrders,
@@ -2203,9 +2267,24 @@ export const useGame = create<GameState>()(
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        const gearDrops = rollAdventureGear(
+          playerLevel,
+          rollGearDropCount(),
+          uid,
+        )
+        const materialDrops = rollRareMaterialDrops(
+          playerLevel,
+          adventure.rewardMaterials,
+        )
+        const updatedRecruits = grantRecruitXp(
+          s.recruitedNpcs,
+          job.npcInstanceIds,
+          scaled.recruitXp,
+        )
         set({
           activeAdventures: s.activeAdventures.filter((a) => a.id !== jobId),
-          coins: s.coins + adventure.rewardCoins,
+          recruitedNpcs: updatedRecruits,
+          coins: s.coins + scaled.rewardCoins,
           xp: xpResult.xp,
           seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
@@ -2214,8 +2293,9 @@ export const useGame = create<GameState>()(
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
           inventory: addItems(s.inventory, adventure.rewardItems),
-          materials: addMaterials(s.materials, adventure.rewardMaterials),
-          toast: `${adventure.name} complete! +${adventure.rewardCoins} coins`,
+          materials: addMaterials(s.materials, materialDrops),
+          gearInventory: [...s.gearInventory, ...gearDrops],
+          toast: `${adventure.name} complete! +${scaled.rewardCoins} coins · ${gearDrops.length} gear · recruits +${scaled.recruitXp} XP`,
         })
       },
 
@@ -2224,7 +2304,8 @@ export const useGame = create<GameState>()(
         if (!blueprint) return
         const s = get()
         if (!s.unlocked.includes(blueprint.buildingId)) {
-          set({ toast: 'Workshop locked — reach Level 15' })
+          const need = buildingUnlockLevel(blueprint.buildingId)
+          set({ toast: `${GEAR_BUILDINGS[blueprint.buildingId].name} unlocks at Level ${need}` })
           return
         }
         const level = levelFromXp(s.xp)
@@ -2270,10 +2351,12 @@ export const useGame = create<GameState>()(
         if (!job || Date.now() < job.doneAt) return
         const blueprint = GEAR_BLUEPRINT_BY_ID[job.blueprintId]
         if (!blueprint) return
+        const craftLevel = levelFromXp(s.xp)
         const gear: GearInstance = {
           id: uid(),
           blueprintId: job.blueprintId,
           equippedBy: null,
+          level: craftLevel,
         }
         const xpResult = applyXpGain(
           s.xp,
