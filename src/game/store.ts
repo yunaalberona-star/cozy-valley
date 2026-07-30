@@ -4,7 +4,7 @@ import { ANIMALS } from './data/animals'
 import { ANIMAL_BUILDINGS } from './data/animalBuildings'
 import { ADVENTURE_BY_ID, TAVERN_UNLOCK_LEVEL } from './data/adventures'
 import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
-import { CROPS, CROP_LIST, levelFromXp } from './data/crops'
+import { CROPS, cropsCrossingLevels, levelFromXp } from './data/crops'
 import {
   animalBuildingForProduct,
   isCropItem,
@@ -23,7 +23,10 @@ import {
   EVENTS,
   MISSION_BY_ID,
   MISSIONS,
+  pickNextMission,
 } from './data/missions'
+import { LEGACY_MISSION_ID_MAP } from './data/missionChain'
+import { unlocksCrossingLevels, unlocksForLevel } from './data/levelUnlocks'
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
 import { ORDERS } from './data/orders'
 import { itemSellPrice, materialSellPrice, seedSellPrice } from './data/sellPrices'
@@ -40,7 +43,7 @@ import {
   isSupabaseConfigured,
   syncPayouts,
 } from './marketClient'
-import { mergeUnlockGuides, tabShouldPulse } from './guides'
+import { mergeCropLevelGuides, mergeUnlockGuides, tabShouldPulse } from './guides'
 import {
   adoptLegacySaveIfNeeded,
   mergePersistedSlice,
@@ -273,12 +276,21 @@ function newUnlocks(prev: UnlockId[], next: UnlockId[]): UnlockId[] {
 function unlockGuidePatch(
   s: { guideTabPulses: TabId[]; guideItemHighlights: string[]; unlocked: UnlockId[] },
   nextUnlocked: UnlockId[],
+  newLevel?: number,
 ) {
-  return mergeUnlockGuides(
+  let guides = mergeUnlockGuides(
     s.guideTabPulses,
     s.guideItemHighlights,
     newUnlocks(s.unlocked, nextUnlocked),
   )
+  if (newLevel != null && newLevel > 1) {
+    guides = mergeCropLevelGuides(
+      guides.guideTabPulses,
+      guides.guideItemHighlights,
+      newLevel,
+    )
+  }
+  return guides
 }
 
 function shopGuidePatch(s: {
@@ -300,28 +312,51 @@ function enqueuePopups(
   return [...queue, ...popups.filter((p): p is PopupState => p != null)]
 }
 
+const SEED_UNLOCK_GRANT = 3
+
+function grantSeedsForLevelCrossing(
+  seeds: Partial<Record<CropId, number>>,
+  oldLevel: number,
+  newLevel: number,
+): Partial<Record<CropId, number>> {
+  const added = cropsCrossingLevels(oldLevel, newLevel)
+  if (added.length === 0) return seeds
+  const next = { ...seeds }
+  for (const cropId of added) {
+    next[cropId] = (next[cropId] ?? 0) + SEED_UNLOCK_GRANT
+  }
+  return next
+}
+
 function applyXpGain(
   xp: number,
   amount: number,
   popupQueue: PopupState[],
   unlocked: UnlockId[],
   activeOrders: ActiveOrder[],
+  seeds: Partial<Record<CropId, number>>,
 ): {
   xp: number
   popupQueue: PopupState[]
   unlocked: UnlockId[]
   activeOrders: ActiveOrder[]
+  seeds: Partial<Record<CropId, number>>
 } {
-  if (amount <= 0) return { xp, popupQueue, unlocked, activeOrders }
+  if (amount <= 0) {
+    return { xp, popupQueue, unlocked, activeOrders, seeds }
+  }
   const oldLevel = levelFromXp(xp)
   const nextXp = xp + amount
   const newLevel = levelFromXp(nextXp)
-  if (newLevel <= oldLevel) return { xp: nextXp, popupQueue, unlocked, activeOrders }
+  if (newLevel <= oldLevel) {
+    return { xp: nextXp, popupQueue, unlocked, activeOrders, seeds }
+  }
 
   let nextUnlocked = unlocked
   let nextQueue = popupQueue
   let nextOrders = activeOrders
-  const levelIds = levelUnlocksCrossing(oldLevel, newLevel).filter(
+  let nextSeeds = seeds
+  const levelIds = unlocksCrossingLevels(oldLevel, newLevel).filter(
     (u) => !unlocked.includes(u),
   )
   if (levelIds.length > 0) {
@@ -330,12 +365,16 @@ function applyXpGain(
       nextQueue,
       unlockPopup(
         levelIds,
-        levelUnlockSubtitle(levelIds),
+        levelUnlockSubtitle(levelIds, newLevel),
       ),
     )
     if (levelIds.includes('orders_board') && activeOrders.length === 0) {
       nextOrders = pickOrders(newLevel)
     }
+  }
+  const newCrops = cropsCrossingLevels(oldLevel, newLevel)
+  if (newCrops.length > 0) {
+    nextSeeds = grantSeedsForLevelCrossing(seeds, oldLevel, newLevel)
   }
   nextQueue = enqueuePopups(nextQueue, {
     kind: 'level_up',
@@ -348,25 +387,11 @@ function applyXpGain(
     popupQueue: nextQueue,
     unlocked: nextUnlocked,
     activeOrders: nextOrders,
+    seeds: nextSeeds,
   }
 }
 
-const LEVEL_FEATURE_UNLOCKS: { level: number; ids: UnlockId[] }[] = [
-  { level: ORDERS_UNLOCK_LEVEL, ids: ['orders_board'] },
-  { level: MARKET_UNLOCK_LEVEL, ids: ['market_board'] },
-  {
-    level: TAVERN_UNLOCK_LEVEL,
-    ids: [
-      'tavern',
-      'adventure_land',
-      'valley_forge',
-      'weavers_hut',
-      'tinker_shed',
-    ],
-  },
-]
-
-function levelUnlockSubtitle(levelIds: UnlockId[]): string {
+function levelUnlockSubtitle(levelIds: UnlockId[], newLevel: number): string {
   if (levelIds.includes('orders_board')) {
     return `Reached Level ${ORDERS_UNLOCK_LEVEL}!`
   }
@@ -376,28 +401,12 @@ function levelUnlockSubtitle(levelIds: UnlockId[]): string {
   if (levelIds.includes('tavern')) {
     return `Reached Level ${TAVERN_UNLOCK_LEVEL}!`
   }
-  return 'New feature unlocked!'
-}
-
-function levelUnlocksCrossing(oldLevel: number, newLevel: number): UnlockId[] {
-  const ids: UnlockId[] = []
-  for (const entry of LEVEL_FEATURE_UNLOCKS) {
-    if (oldLevel < entry.level && newLevel >= entry.level) {
-      ids.push(...entry.ids)
-    }
-  }
-  return ids
+  return `Reached Level ${newLevel}!`
 }
 
 function syncLevelUnlocks(xp: number, unlocked: UnlockId[]): UnlockId[] {
   const level = levelFromXp(xp)
-  let next = unlocked
-  for (const entry of LEVEL_FEATURE_UNLOCKS) {
-    if (level >= entry.level) {
-      next = [...new Set([...next, ...entry.ids])]
-    }
-  }
-  return next
+  return [...new Set([...unlocked, ...unlocksForLevel(level)])]
 }
 
 function busyNpcIds(activeAdventures: ActiveAdventure[]): Set<string> {
@@ -640,70 +649,35 @@ function migrateSaveState(
     }
     state.contextGuideTab = null
   }
+  if (version < 9) {
+    if (Array.isArray(state.completedMissions)) {
+      state.completedMissions = (state.completedMissions as string[]).map(
+        (id) => LEGACY_MISSION_ID_MAP[id] ?? id,
+      )
+    }
+    const xp = typeof state.xp === 'number' ? state.xp : 0
+    const level = levelFromXp(xp)
+    state.unlocked = syncLevelUnlocks(xp, (state.unlocked as UnlockId[]) ?? [])
+    const completed = (state.completedMissions as string[]) ?? []
+    const activeId = state.activeMissionId as string | null
+    const activeMission = activeId ? MISSION_BY_ID[activeId] : undefined
+    const activeOk =
+      activeMission &&
+      !completed.includes(activeId!) &&
+      (activeMission.minLevel ?? 1) <= level
+    if (!activeOk) {
+      const next = pickNextMission(completed, level, MISSIONS)
+      state.activeMissionId = next?.id ?? null
+      state.missionProgress = next
+        ? emptyProgress(next.goals, next.id)
+        : {}
+    }
+  }
   return state
 }
 
-function cropAvailable(cropId: CropId, unlocked: UnlockId[]): boolean {
-  const u = new Set(unlocked)
-  switch (cropId) {
-    case 'wheat':
-    case 'carrot':
-      return true
-    case 'corn':
-    case 'tomato':
-      return u.has('mill')
-    case 'oat':
-    case 'berry':
-    case 'strawberry':
-      return u.has('bakery') || u.has('juice_press')
-    case 'sugarcane':
-      return u.has('sugar_mill')
-    case 'grape':
-      return u.has('juice_press') || u.has('winery')
-    case 'cotton':
-      return u.has('loom')
-    case 'pumpkin':
-    case 'sunflower':
-      return u.has('kitchen') || u.has('loom')
-    default:
-      return true
-  }
-}
-
-const SEED_UNLOCK_GRANT = 3
-
-function newlyUnlockedCrops(
-  before: UnlockId[],
-  after: UnlockId[],
-): CropId[] {
-  return CROP_LIST.filter(
-    (crop) => !cropAvailable(crop.id, before) && cropAvailable(crop.id, after),
-  ).map((crop) => crop.id)
-}
-
-function grantSeedsForNewCrops(
-  seeds: Partial<Record<CropId, number>>,
-  before: UnlockId[],
-  after: UnlockId[],
-): Partial<Record<CropId, number>> {
-  const added = newlyUnlockedCrops(before, after)
-  if (added.length === 0) return seeds
-  const next = { ...seeds }
-  for (const cropId of added) {
-    next[cropId] = (next[cropId] ?? 0) + SEED_UNLOCK_GRANT
-  }
-  return next
-}
-
-function patchUnlockTransition(
-  seeds: Partial<Record<CropId, number>>,
-  before: UnlockId[],
-  after: UnlockId[],
-): { seeds: Partial<Record<CropId, number>>; unlocked: UnlockId[] } {
-  return {
-    unlocked: after,
-    seeds: grantSeedsForNewCrops(seeds, before, after),
-  }
+function cropAvailable(cropId: CropId, playerLevel: number): boolean {
+  return CROPS[cropId].unlockLevel <= playerLevel
 }
 
 function addMarketItems(
@@ -886,7 +860,7 @@ const initial = () => {
     craftQueue: [] as CraftJob[],
     activeOrders: [] as ActiveOrder[],
     animals: [] as AnimalInstance[],
-    unlocked: [] as UnlockId[],
+    unlocked: syncLevelUnlocks(0, []) as UnlockId[],
     ownedBuildings: [] as BuildingId[],
     machineQueueBonus: {} as Partial<Record<BuildingId, number>>,
     completedMissions: [] as string[],
@@ -905,7 +879,7 @@ const initial = () => {
     gearInventory: [] as GearInstance[],
     gearCraftQueue: [] as GearCraftJob[],
     popupQueue: [] as PopupState[],
-    toast: 'Welcome! Check Missions to unlock your Mill.' as string | null,
+    toast: 'Welcome! Level up to unlock machines and new seeds.' as string | null,
     guideTabPulses: [] as TabId[],
     guideItemHighlights: [] as string[],
     contextGuideTab: null as TabId | null,
@@ -1014,7 +988,8 @@ export const useGame = create<GameState>()(
           levelFromXp(s.xp) >= MARKET_UNLOCK_LEVEL
         )
       },
-      isCropAvailable: (id) => cropAvailable(id, get().unlocked),
+      isCropAvailable: (id) =>
+        cropAvailable(id, levelFromXp(get().xp)),
       isTavernOpen: () => get().unlocked.includes('tavern'),
       machineQueueCapacity: (id) =>
         machineQueueSize(id, get().machineQueueBonus),
@@ -1261,19 +1236,20 @@ export const useGame = create<GameState>()(
           s.popupQueue,
           s.unlocked,
           s.activeOrders,
-        )
-        const guides = unlockGuidePatch(s, xpResult.unlocked)
-        const unlockPatch = patchUnlockTransition(
           s.seeds,
-          s.unlocked,
+        )
+        const guides = unlockGuidePatch(
+          s,
           xpResult.unlocked,
+          levelFromXp(xpResult.xp),
         )
         set({
           plots,
           inventory: addItem(s.inventory, cropId, crop.harvestQty),
           xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
-          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1360,19 +1336,20 @@ export const useGame = create<GameState>()(
           s.popupQueue,
           s.unlocked,
           s.activeOrders,
-        )
-        const guides = unlockGuidePatch(s, xpResult.unlocked)
-        const unlockPatch = patchUnlockTransition(
           s.seeds,
-          s.unlocked,
+        )
+        const guides = unlockGuidePatch(
+          s,
           xpResult.unlocked,
+          levelFromXp(xpResult.xp),
         )
         set({
           craftQueue,
           inventory: addItem(s.inventory, recipe.output, recipe.outputQty),
           xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
-          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1386,7 +1363,7 @@ export const useGame = create<GameState>()(
         if (!building) return
         const s = get()
         if (!s.unlocked.includes(id)) {
-          set({ toast: 'Blueprint locked — finish missions first' })
+          set({ toast: 'Blueprint locked — level up to unlock' })
           return
         }
         if (s.ownedBuildings.includes(id)) {
@@ -1511,18 +1488,19 @@ export const useGame = create<GameState>()(
           s.popupQueue,
           s.unlocked,
           s.activeOrders,
-        )
-        const guides = unlockGuidePatch(s, xpResult.unlocked)
-        const unlockPatch = patchUnlockTransition(
           s.seeds,
-          s.unlocked,
+        )
+        const guides = unlockGuidePatch(
+          s,
           xpResult.unlocked,
+          levelFromXp(xpResult.xp),
         )
         set({
           inventory: addItem(s.inventory, def.product, def.productQty),
           xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
-          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1559,6 +1537,7 @@ export const useGame = create<GameState>()(
           s.popupQueue,
           s.unlocked,
           s.activeOrders,
+          s.seeds,
         )
         const activeOrdersAfter = xpResult.activeOrders.map((o) =>
           o.slot === slot
@@ -1571,18 +1550,18 @@ export const useGame = create<GameState>()(
         const replacement = replacementId
           ? ORDERS.find((o) => o.id === replacementId)
           : null
-        const guides = unlockGuidePatch(s, xpResult.unlocked)
-        const unlockPatch = patchUnlockTransition(
-          s.seeds,
-          s.unlocked,
+        const guides = unlockGuidePatch(
+          s,
           xpResult.unlocked,
+          levelFromXp(xpResult.xp),
         )
         set({
           inventory: takeItems(s.inventory, order.needs),
           coins: s.coins + order.rewardCoins,
           xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
-          ...unlockPatch,
           activeOrders: activeOrdersAfter,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -1848,52 +1827,35 @@ export const useGame = create<GameState>()(
         const queueWithoutClaim = s.popupQueue.filter(
           (p) => p.kind !== 'mission_claim',
         )
-        const unlocked = [...new Set([...s.unlocked, ...mission.unlocks])]
-        const freshUnlocks = newUnlocks(s.unlocked, unlocked)
         const completedMissions = [...s.completedMissions, id]
-        const next = MISSIONS.find(
-          (m) =>
-            !completedMissions.includes(m.id) &&
-            (!m.requires || completedMissions.includes(m.requires)),
-        )
+        const playerLevel = levelFromXp(s.xp + mission.rewardXp)
+        const next = pickNextMission(completedMissions, playerLevel, MISSIONS)
         const xpResult = applyXpGain(
           s.xp,
           mission.rewardXp,
           queueWithoutClaim,
-          unlocked,
-          s.activeOrders,
-        )
-        const animalUnlock = freshUnlocks.find(
-          (u) => u in ANIMAL_BUILDINGS,
-        ) as AnimalBuildingId | undefined
-        const blueprintUnlock = mission.unlocks.find(
-          (u) => u in BUILDINGS,
-        ) as BuildingId | undefined
-        const guides = unlockGuidePatch(s, xpResult.unlocked)
-        const unlockPatch = patchUnlockTransition(
-          s.seeds,
           s.unlocked,
+          s.activeOrders,
+          s.seeds,
+        )
+        const guides = unlockGuidePatch(
+          s,
           xpResult.unlocked,
+          levelFromXp(xpResult.xp),
         )
         set({
           coins: s.coins + mission.rewardCoins,
           xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
           inventory: addItems(s.inventory, mission.rewardItems),
-          ...unlockPatch,
           completedMissions,
           activeMissionId: next?.id ?? null,
           missionProgress: next ? emptyProgress(next.goals, next.id) : {},
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          popupQueue: enqueuePopups(
-            xpResult.popupQueue,
-            unlockPopup(freshUnlocks, 'Mission complete'),
-          ),
-          selectedBuilding:
-            blueprintUnlock ?? s.selectedBuilding,
-          selectedAnimalBuilding:
-            animalUnlock ?? s.selectedAnimalBuilding,
+          popupQueue: xpResult.popupQueue,
           toast: `Mission complete! +${mission.rewardCoins} coins`,
         })
         get().track('own_coins', undefined, get().coins)
@@ -1947,18 +1909,19 @@ export const useGame = create<GameState>()(
           s.popupQueue,
           unlocked,
           s.activeOrders,
-        )
-        const guides = unlockGuidePatch(s, xpResult.unlocked)
-        const unlockPatch = patchUnlockTransition(
           s.seeds,
-          s.unlocked,
+        )
+        const guides = unlockGuidePatch(
+          s,
           xpResult.unlocked,
+          levelFromXp(xpResult.xp),
         )
         set({
           coins: s.coins + event.rewardCoins,
           xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
           inventory: addItems(s.inventory, event.rewardItems),
-          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -2068,19 +2031,20 @@ export const useGame = create<GameState>()(
           s.popupQueue,
           s.unlocked,
           s.activeOrders,
-        )
-        const guides = unlockGuidePatch(s, xpResult.unlocked)
-        const unlockPatch = patchUnlockTransition(
           s.seeds,
-          s.unlocked,
+        )
+        const guides = unlockGuidePatch(
+          s,
           xpResult.unlocked,
+          levelFromXp(xpResult.xp),
         )
         set({
           activeAdventures: s.activeAdventures.filter((a) => a.id !== jobId),
           coins: s.coins + adventure.rewardCoins,
           xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
-          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -2152,19 +2116,20 @@ export const useGame = create<GameState>()(
           s.popupQueue,
           s.unlocked,
           s.activeOrders,
-        )
-        const guides = unlockGuidePatch(s, xpResult.unlocked)
-        const unlockPatch = patchUnlockTransition(
           s.seeds,
-          s.unlocked,
+        )
+        const guides = unlockGuidePatch(
+          s,
           xpResult.unlocked,
+          levelFromXp(xpResult.xp),
         )
         set({
           gearCraftQueue: s.gearCraftQueue.filter((_, i) => i !== index),
           gearInventory: [...s.gearInventory, gear],
           xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
-          ...unlockPatch,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,

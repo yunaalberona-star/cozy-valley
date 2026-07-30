@@ -2,7 +2,7 @@ import { ANIMAL_BUILDINGS } from './animalBuildings'
 import { BUILDINGS, RECIPES } from './buildings'
 import type { AnimalBuildingDef, BuildingDef, BuildingId, ItemId, RecipeDef } from '../types'
 import { CROPS } from './crops'
-import { MISSIONS } from './missions'
+import { BUILDING_LEVEL_UNLOCKS } from './levelUnlocks'
 
 const ANIMAL_PRODUCT_LEVEL: Partial<Record<ItemId, number>> = {
   egg: 2,
@@ -54,8 +54,8 @@ export function recipeUnlockLevel(recipeId: string): number {
 export function machineUnlockOrder(): BuildingId[] {
   const order: BuildingId[] = []
   const seen = new Set<string>()
-  for (const mission of MISSIONS) {
-    for (const unlock of mission.unlocks) {
+  for (const entry of BUILDING_LEVEL_UNLOCKS) {
+    for (const unlock of entry.ids) {
       if (unlock in BUILDINGS && !seen.has(unlock)) {
         seen.add(unlock)
         order.push(unlock as BuildingId)
@@ -71,8 +71,8 @@ export function machineUnlockOrder(): BuildingId[] {
 export function animalBuildingUnlockOrder(): string[] {
   const order: string[] = []
   const seen = new Set<string>()
-  for (const mission of MISSIONS) {
-    for (const unlock of mission.unlocks) {
+  for (const entry of BUILDING_LEVEL_UNLOCKS) {
+    for (const unlock of entry.ids) {
       if (unlock in ANIMAL_BUILDINGS && !seen.has(unlock)) {
         seen.add(unlock)
         order.push(unlock)

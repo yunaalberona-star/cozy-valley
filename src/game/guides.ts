@@ -1,27 +1,16 @@
 import { BUILDINGS } from './data/buildings'
 import { ANIMAL_BUILDINGS } from './data/animalBuildings'
-import { CROPS } from './data/crops'
+import { CROPS, cropsCrossingLevels } from './data/crops'
 import { GEAR_BUILDINGS } from './data/gear'
 import type { CropId, TabId, UnlockId } from './types'
 
-export function guideCropsForUnlock(id: UnlockId): CropId[] {
-  switch (id) {
-    case 'mill':
-      return ['corn', 'tomato']
-    case 'bakery':
-    case 'juice_press':
-      return ['oat', 'berry', 'strawberry', 'grape']
-    case 'sugar_mill':
-      return ['sugarcane']
-    case 'winery':
-      return ['grape']
-    case 'loom':
-      return ['cotton', 'pumpkin', 'sunflower']
-    case 'kitchen':
-      return ['pumpkin', 'sunflower']
-    default:
-      return []
-  }
+/** Crops that become buyable when the player hits this level. */
+export function guideCropsForLevel(level: number): CropId[] {
+  return cropsCrossingLevels(level - 1, level)
+}
+
+export function guideCropsForUnlock(_id: UnlockId): CropId[] {
+  return []
 }
 
 export function guideTabsForUnlock(id: UnlockId): TabId[] {
@@ -35,6 +24,25 @@ export function guideTabsForUnlock(id: UnlockId): TabId[] {
   if (id === 'market_board') tabs.push('market')
   if (guideCropsForUnlock(id).length > 0) tabs.push('shop')
   return tabs
+}
+
+export function mergeCropLevelGuides(
+  tabPulses: TabId[],
+  itemHighlights: string[],
+  newLevel: number,
+): { guideTabPulses: TabId[]; guideItemHighlights: string[] } {
+  const crops = guideCropsForLevel(newLevel)
+  if (crops.length === 0) {
+    return { guideTabPulses: tabPulses, guideItemHighlights: itemHighlights }
+  }
+  const tabs = new Set(tabPulses)
+  const items = new Set(itemHighlights)
+  tabs.add('shop')
+  for (const crop of crops) items.add(crop)
+  return {
+    guideTabPulses: [...tabs],
+    guideItemHighlights: [...items],
+  }
 }
 
 export function mergeUnlockGuides(

@@ -135,7 +135,7 @@ function TopBar() {
         </span>
         <div>
           <p className="brand-name">Cozy Valley</p>
-          <p className="brand-sub">missions unlock the farm</p>
+          <p className="brand-sub">level up to grow the valley</p>
         </div>
       </div>
       <div className="stats">
@@ -347,7 +347,7 @@ function MissionsView() {
     <div className="panel">
       <div className="panel-head">
         <h2>Missions</h2>
-        <p>Complete tasks to unlock machines, animals & more.</p>
+        <p>Complete tasks for coins & XP — machines unlock as you level.</p>
       </div>
 
       {mission ? (
@@ -361,8 +361,10 @@ function MissionsView() {
           </div>
           <GoalList parentId={mission.id} progress={missionProgress} />
           <p className="unlock-line">
-            Unlocks:{' '}
-            {mission.unlocks.map((u) => unlockLabel(u)).join(', ') || '—'}
+            Reward: 🪙 {mission.rewardCoins} · ⭐ {mission.rewardXp} XP
+            {mission.minLevel != null && mission.minLevel > 1
+              ? ` · Level ${mission.minLevel}+`
+              : ''}
           </p>
           <button
             type="button"
@@ -376,7 +378,7 @@ function MissionsView() {
           </button>
         </div>
       ) : (
-        <p className="muted pad">All story missions complete. Nice work!</p>
+        <p className="muted pad">All 50 story missions complete. Nice work!</p>
       )}
 
       <h3 className="section-label">Events</h3>

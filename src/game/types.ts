@@ -11,6 +11,21 @@ export type CropId =
   | 'cotton'
   | 'pumpkin'
   | 'sunflower'
+  | 'potato'
+  | 'lettuce'
+  | 'onion'
+  | 'pepper'
+  | 'lavender'
+  | 'rice'
+  | 'apple'
+  | 'melon'
+  | 'chili'
+  | 'basil'
+  | 'beet'
+  | 'cabbage'
+  | 'peach'
+  | 'mint'
+  | 'eggplant'
 
 export type AnimalProductId = 'egg' | 'milk' | 'wool' | 'honey' | 'bacon' | 'goat_milk'
 
@@ -243,6 +258,8 @@ export interface MissionDef {
   unlocks: UnlockId[]
   /** Previous mission that must be completed first */
   requires?: string
+  /** Minimum player level before this mission can become active */
+  minLevel?: number
 }
 
 export interface EventDef {
