@@ -32,20 +32,62 @@ const MISSION_EMOJIS = [
 ]
 
 const MISSION_STORIES: Record<number, string> = {
-  1: 'Settle into the valley. Harvest wheat to prove the soil is good.',
-  2: 'Grind flour at the Mill and learn the machines.',
-  3: 'Buy a chicken and collect fresh eggs.',
-  4: 'A cow means milk — time for the Dairy.',
-  5: 'Bake bread and churn cheese for the village.',
-  6: 'Run the Juice Press and fulfill a market order.',
-  7: 'Refine sugar and cook berry jam.',
-  8: 'Fire up the Kitchen and Grill.',
-  9: 'Sheep, bees, and cloth on the Loom.',
-  10: 'Sew a sweater and bottle wine for the fair.',
-  11: 'Raise ducks and mix duck feed.',
-  12: 'Goats, goat milk, and fresh butter.',
-  13: 'Pigs, bacon, and hearty soup.',
-  14: 'Candy, cake, pie, and a busy order board.',
+  1: 'Mayor Maple greets you at the gate. "Prove this soil is good — harvest wheat for the village pantry."',
+  2: 'The old mill creaks to life. Grind flour and learn how your machines work.',
+  3: 'Clara the chicken keeper waves you over. Buy a hen and bring back fresh eggs.',
+  4: 'Dairy Lane needs milk! A cow in the barn means cheese and butter soon.',
+  5: 'The bakery bell rings. Bake bread and churn cheese for hungry neighbors.',
+  6: 'Market day! Run the Juice Press and fulfill your first board order.',
+  7: 'Sugarcane sways in the breeze. Refine sugar and cook berry jam for the fair.',
+  8: 'Fire up the Kitchen and Grill — hearty meals keep the valley smiling.',
+  9: 'Soft fleece season! Tend sheep and bees, then weave cloth on the Loom.',
+  10: 'The valley fair is near. Sew a sweater, bottle wine, and save up coins.',
+  11: 'Ducks splash at the pond. Raise ducks and mix duck feed for extra eggs.',
+  12: 'Goat Hill calls. Fresh goat milk and butter for the hillside café.',
+  13: 'Smoke rises from the sty. Pigs, bacon, and a pot of hearty soup.',
+  14: 'Master Chef week! Candy, cake, pie — and keep the order board busy.',
+}
+
+const CHAPTER_DEFS: { title: string; npc: string; npcEmoji: string; start: number; end: number }[] = [
+  { title: 'Chapter 1 · First Furrows', npc: 'Mayor Maple', npcEmoji: '🧑‍🌾', start: 1, end: 3 },
+  { title: 'Chapter 2 · Mill & Market', npc: 'Miller Finn', npcEmoji: '🌬️', start: 4, end: 6 },
+  { title: 'Chapter 3 · Sweet Valley', npc: 'Baker Rosa', npcEmoji: '🍞', start: 7, end: 9 },
+  { title: 'Chapter 4 · Hearth & Herd', npc: 'Chef Eli', npcEmoji: '👩‍🍳', start: 10, end: 12 },
+  { title: 'Chapter 5 · Riverside', npc: 'Farmer Jo', npcEmoji: '🦆', start: 13, end: 14 },
+]
+
+function chapterForMission(n: number): {
+  chapter: number
+  chapterTitle: string
+  npcName: string
+  npcEmoji: string
+} {
+  for (let i = 0; i < CHAPTER_DEFS.length; i++) {
+    const c = CHAPTER_DEFS[i]!
+    if (n >= c.start && n <= c.end) {
+      return {
+        chapter: i + 1,
+        chapterTitle: c.title,
+        npcName: c.npc,
+        npcEmoji: c.npcEmoji,
+      }
+    }
+  }
+  const chapterNum = 5 + Math.ceil((n - 14) / 5)
+  const mode = n % 3
+  const titles = ['Harvest Horizons', 'Pasture Tales', 'Valley Commerce']
+  const npcs = [
+    { name: 'Scout Mira', emoji: '🌾' },
+    { name: 'Herder Sam', emoji: '🐄' },
+    { name: 'Trader Lex', emoji: '📦' },
+  ]
+  const pick = mode === 0 ? 0 : mode === 1 ? 1 : 2
+  return {
+    chapter: chapterNum,
+    chapterTitle: `Chapter ${chapterNum} · ${titles[pick]}`,
+    npcName: npcs[pick]!.name,
+    npcEmoji: npcs[pick]!.emoji,
+  }
 }
 
 const ANIMAL_ROTATION: AnimalTypeId[] = [
@@ -271,14 +313,15 @@ function goalsForMission(n: number): MissionGoal[] {
 
 function storyFor(n: number): string {
   if (MISSION_STORIES[n]) return MISSION_STORIES[n]!
+  const { npcName } = chapterForMission(n)
   const mode = n % 3
   if (mode === 0) {
-    return `Level ${n}: harvest new crops and keep the machines running.`
+    return `${npcName} needs help: harvest new crops and keep the machines running.`
   }
   if (mode === 1) {
-    return `Level ${n}: tend your animals and gather fresh goods.`
+    return `${npcName} asks you to tend animals and gather fresh goods.`
   }
-  return `Level ${n}: run the farm, craft goods, and keep orders moving.`
+  return `${npcName} wants you to craft goods and keep orders moving.`
 }
 
 function nameFor(n: number): string {
@@ -308,6 +351,7 @@ export function buildMissionChain(maxLevel = 50): MissionDef[] {
   const missions: MissionDef[] = []
   for (let n = 1; n <= maxLevel; n++) {
     const { coins, xp } = rewardsFor(n)
+    const chapterMeta = chapterForMission(n)
     missions.push({
       id: missionId(n),
       name: nameFor(n),
@@ -319,11 +363,28 @@ export function buildMissionChain(maxLevel = 50): MissionDef[] {
       unlocks: [],
       requires: n > 1 ? missionId(n - 1) : undefined,
       minLevel: n,
+      chapter: chapterMeta.chapter,
+      chapterTitle: chapterMeta.chapterTitle,
+      npcName: chapterMeta.npcName,
+      npcEmoji: chapterMeta.npcEmoji,
     })
   }
   return missions
 }
 
+/** First incomplete mission in chain (ignores level gate). */
+export function findNextMissionInChain(
+  completedMissions: string[],
+  missions: MissionDef[],
+): MissionDef | undefined {
+  return missions.find(
+    (m) =>
+      !completedMissions.includes(m.id) &&
+      (!m.requires || completedMissions.includes(m.requires)),
+  )
+}
+
+/** Next mission the player can actively work on (level + chain satisfied). */
 export function pickNextMission(
   completedMissions: string[],
   playerLevel: number,
@@ -335,6 +396,25 @@ export function pickNextMission(
       (!m.requires || completedMissions.includes(m.requires)) &&
       (m.minLevel ?? 1) <= playerLevel,
   )
+}
+
+/** Always show a mission when the chain isn't finished — includes level-gated next. */
+export function resolveActiveMission(
+  completedMissions: string[],
+  playerLevel: number,
+  missions: MissionDef[],
+): MissionDef | undefined {
+  return (
+    pickNextMission(completedMissions, playerLevel, missions) ??
+    findNextMissionInChain(completedMissions, missions)
+  )
+}
+
+export function isMissionLevelGated(
+  mission: MissionDef,
+  playerLevel: number,
+): boolean {
+  return (mission.minLevel ?? 1) > playerLevel
 }
 
 /** Map legacy save mission ids → current chain ids. */

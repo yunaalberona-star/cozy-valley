@@ -45,7 +45,7 @@ export const CROPS: Record<CropId, CropDef> = {
   oat: {
     id: 'oat',
     name: 'Oat',
-    emoji: '🥣',
+    emoji: '🌿',
     seedCost: 12,
     growMs: 32_000,
     harvestQty: 2,
@@ -105,7 +105,7 @@ export const CROPS: Record<CropId, CropDef> = {
   cotton: {
     id: 'cotton',
     name: 'Cotton',
-    emoji: '☁️',
+    emoji: '🌼',
     seedCost: 26,
     growMs: 70_000,
     harvestQty: 2,
@@ -165,7 +165,7 @@ export const CROPS: Record<CropId, CropDef> = {
   lavender: {
     id: 'lavender',
     name: 'Lavender',
-    emoji: '💜',
+    emoji: '💐',
     seedCost: 22,
     growMs: 48_000,
     harvestQty: 2,
@@ -175,7 +175,7 @@ export const CROPS: Record<CropId, CropDef> = {
   rice: {
     id: 'rice',
     name: 'Rice',
-    emoji: '🍚',
+    emoji: '🌾',
     seedCost: 24,
     growMs: 52_000,
     harvestQty: 3,
@@ -235,7 +235,7 @@ export const CROPS: Record<CropId, CropDef> = {
   cabbage: {
     id: 'cabbage',
     name: 'Cabbage',
-    emoji: '🥬',
+    emoji: '🥗',
     seedCost: 36,
     growMs: 75_000,
     harvestQty: 2,

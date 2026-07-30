@@ -137,6 +137,7 @@ export type TabId =
   | 'machines'
   | 'animals'
   | 'missions'
+  | 'events'
   | 'orders'
   | 'market'
   | 'bag'
@@ -260,6 +261,28 @@ export interface MissionDef {
   requires?: string
   /** Minimum player level before this mission can become active */
   minLevel?: number
+  /** FFS-style chapter grouping */
+  chapter: number
+  chapterTitle: string
+  /** Narrator for story missions */
+  npcName?: string
+  npcEmoji?: string
+}
+
+export interface EventStageReward {
+  rewardCoins?: number
+  rewardXp?: number
+  rewardItems?: Partial<Record<ItemId, number>>
+  rewardSeeds?: Partial<Record<CropId, number>>
+  unlocks?: UnlockId[]
+}
+
+export interface EventStageDef {
+  id: string
+  name: string
+  story: string
+  goals: MissionGoal[]
+  rewards: EventStageReward
 }
 
 export interface EventDef {
@@ -269,11 +292,9 @@ export interface EventDef {
   blurb: string
   /** Duration while active once started */
   durationMs: number
-  goals: MissionGoal[]
-  rewardCoins: number
-  rewardXp: number
-  rewardItems?: Partial<Record<ItemId, number>>
-  unlocks?: UnlockId[]
+  stages: EventStageDef[]
+  /** Bonus when all stages are claimed */
+  finaleReward?: EventStageReward
 }
 
 export interface PlotState {

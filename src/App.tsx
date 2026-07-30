@@ -14,7 +14,7 @@ import {
   ORDERS_UNLOCK_LEVEL,
   queueUpgradeCost,
 } from './game/data/buildings'
-import { CROPS, SORTED_CROP_LIST, xpProgress } from './game/data/crops'
+import { CROPS, SORTED_CROP_LIST, levelFromXp, xpProgress } from './game/data/crops'
 import {
   ADVENTURES,
   adventuresForLevel,
@@ -40,6 +40,8 @@ import {
   EVENT_BY_ID,
   EVENTS,
   MISSION_BY_ID,
+  eventStageParentId,
+  isMissionLevelGated,
 } from './game/data/missions'
 import { MAX_RECRUITED_NPCS, NPC_LIST, NPCS } from './game/data/npcs'
 import { ORDERS } from './game/data/orders'
@@ -109,6 +111,7 @@ function formatLeft(ms: number) {
 
 const TABS: { id: TabId; label: string; emoji: string }[] = [
   { id: 'missions', label: 'Missions', emoji: '📜' },
+  { id: 'events', label: 'Events', emoji: '🎪' },
   { id: 'farm', label: 'Farm', emoji: '🌱' },
   { id: 'machines', label: 'Machines', emoji: '🏭' },
   { id: 'animals', label: 'Animals', emoji: '🐄' },
@@ -269,16 +272,15 @@ function CelebrationPopup() {
 }
 
 function GoalList({
+  goals,
   parentId,
   progress,
 }: {
+  goals: import('./game/types').MissionGoal[]
   parentId: string
   progress: Record<string, number>
 }) {
   const navigateToMissionGoal = useGame((s) => s.navigateToMissionGoal)
-  const mission = MISSION_BY_ID[parentId]
-  const event = EVENT_BY_ID[parentId]
-  const goals = mission?.goals ?? event?.goals ?? []
   return (
     <ul className="need-list mission-goals">
       {goals.map((g) => {
@@ -314,122 +316,81 @@ function GoalList({
 }
 
 function MissionsView() {
-  const now = useNow(1000)
+  const xp = useGame((s) => s.xp)
   const activeMissionId = useGame((s) => s.activeMissionId)
   const missionProgress = useGame((s) => s.missionProgress)
   const completedMissions = useGame((s) => s.completedMissions)
   const claimMission = useGame((s) => s.claimMission)
-  const activeEventId = useGame((s) => s.activeEventId)
-  const eventEndsAt = useGame((s) => s.eventEndsAt)
-  const eventProgress = useGame((s) => s.eventProgress)
-  const startEvent = useGame((s) => s.startEvent)
-  const claimEvent = useGame((s) => s.claimEvent)
   const unlocked = useGame((s) => s.unlocked)
+  const playerLevel = levelFromXp(xp)
 
   const mission = activeMissionId ? MISSION_BY_ID[activeMissionId] : null
+  const levelGated = mission ? isMissionLevelGated(mission, playerLevel) : false
   const missionDone =
     mission &&
+    !levelGated &&
     mission.goals.every(
       (g) =>
         missionGoalProgress(missionProgress, mission.id, g.id) >= g.amount,
     )
-
-  const event = activeEventId ? EVENT_BY_ID[activeEventId] : null
-  const eventExpired = eventEndsAt != null && now > eventEndsAt
-  const eventDone =
-    event &&
-    !eventExpired &&
-    event.goals.every(
-      (g) => missionGoalProgress(eventProgress, event.id, g.id) >= g.amount,
-    )
+  const allComplete = completedMissions.length >= 50 && !mission
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <h2>Missions</h2>
-        <p>Complete tasks for coins & XP — machines unlock as you level.</p>
+        <h2>Story Missions</h2>
+        <p>Chapter-based tasks for coins & XP — machines unlock as you level.</p>
       </div>
 
       {mission ? (
-        <div className="recipe-card highlight">
-          <div className="recipe-top">
-            <span className="big-emoji">{mission.emoji}</span>
-            <div>
-              <strong>{mission.name}</strong>
-              <p className="muted">{mission.story}</p>
-            </div>
-          </div>
-          <GoalList parentId={mission.id} progress={missionProgress} />
-          <p className="unlock-line">
-            Reward: 🪙 {mission.rewardCoins} · ⭐ {mission.rewardXp} XP
-            {mission.minLevel != null && mission.minLevel > 1
-              ? ` · Level ${mission.minLevel}+`
-              : ''}
+        <>
+          <p className="chapter-label">
+            {mission.chapterTitle}
+            {mission.npcEmoji && mission.npcName ? (
+              <span className="muted"> · {mission.npcEmoji} {mission.npcName}</span>
+            ) : null}
           </p>
-          <button
-            type="button"
-            className="btn full"
-            disabled={!missionDone}
-            onClick={claimMission}
-          >
-            {missionDone
-              ? `Claim · 🪙 ${mission.rewardCoins}`
-              : 'In progress…'}
-          </button>
-        </div>
-      ) : (
-        <p className="muted pad">All 50 story missions complete. Nice work!</p>
-      )}
-
-      <h3 className="section-label">Events</h3>
-      {event ? (
-        <div className="recipe-card">
-          <div className="recipe-top">
-            <span className="big-emoji">{event.emoji}</span>
-            <div>
-              <strong>{event.name}</strong>
-              <p className="muted">
-                {eventExpired
-                  ? 'Expired'
-                  : `Ends in ${formatLeft((eventEndsAt ?? now) - now)}`}
-              </p>
-            </div>
-          </div>
-          <GoalList parentId={event.id} progress={eventProgress} />
-          <button
-            type="button"
-            className="btn full"
-            disabled={!eventDone && !eventExpired}
-            onClick={claimEvent}
-          >
-            {eventExpired
-              ? 'Dismiss'
-              : eventDone
-                ? `Claim · 🪙 ${event.rewardCoins}`
-                : 'Event active…'}
-          </button>
-        </div>
-      ) : (
-        <div className="card-list">
-          {EVENTS.map((ev) => (
-            <div key={ev.id} className="recipe-card">
-              <div className="recipe-top">
-                <span className="big-emoji">{ev.emoji}</span>
-                <div>
-                  <strong>{ev.name}</strong>
-                  <p className="muted">{ev.blurb}</p>
-                </div>
+          <div className={`recipe-card highlight${levelGated ? ' level-gated' : ''}`}>
+            <div className="recipe-top">
+              <span className="big-emoji">{mission.emoji}</span>
+              <div>
+                <strong>{mission.name}</strong>
+                <p className="muted">{mission.story}</p>
               </div>
-              <button
-                type="button"
-                className="btn full"
-                onClick={() => startEvent(ev.id)}
-              >
-                Start · {formatLeft(ev.durationMs)}
-              </button>
             </div>
-          ))}
-        </div>
+            {levelGated ? (
+              <p className="level-gate-msg">
+                🔒 Reach Level {mission.minLevel} to begin this mission.
+                Keep farming and crafting to level up!
+              </p>
+            ) : (
+              <>
+                <GoalList
+                  goals={mission.goals}
+                  parentId={mission.id}
+                  progress={missionProgress}
+                />
+                <p className="unlock-line">
+                  Reward: 🪙 {mission.rewardCoins} · ⭐ {mission.rewardXp} XP
+                </p>
+                <button
+                  type="button"
+                  className="btn full"
+                  disabled={!missionDone}
+                  onClick={claimMission}
+                >
+                  {missionDone
+                    ? `Claim · 🪙 ${mission.rewardCoins}`
+                    : 'In progress…'}
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      ) : allComplete ? (
+        <p className="muted pad">All 50 story missions complete. Nice work!</p>
+      ) : (
+        <p className="muted pad">Loading missions…</p>
       )}
 
       <h3 className="section-label">Unlocked so far</h3>
@@ -446,8 +407,145 @@ function MissionsView() {
 
       {completedMissions.length > 0 && (
         <p className="muted pad small">
-          Completed: {completedMissions.length} missions
+          Completed: {completedMissions.length} / 50 missions
         </p>
+      )}
+    </div>
+  )
+}
+
+function EventsView() {
+  const now = useNow(1000)
+  const activeEventId = useGame((s) => s.activeEventId)
+  const eventEndsAt = useGame((s) => s.eventEndsAt)
+  const eventStageIndex = useGame((s) => s.eventStageIndex)
+  const eventProgress = useGame((s) => s.eventProgress)
+  const completedEvents = useGame((s) => s.completedEvents)
+  const startEvent = useGame((s) => s.startEvent)
+  const claimEvent = useGame((s) => s.claimEvent)
+
+  const event = activeEventId ? EVENT_BY_ID[activeEventId] : null
+  const eventExpired = eventEndsAt != null && now > eventEndsAt
+  const currentStage = event?.stages[eventStageIndex]
+  const stageParentId =
+    event && currentStage
+      ? eventStageParentId(event.id, eventStageIndex)
+      : ''
+  const stageDone =
+    currentStage &&
+    !eventExpired &&
+    currentStage.goals.every(
+      (g) => missionGoalProgress(eventProgress, stageParentId, g.id) >= g.amount,
+    )
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Events</h2>
+        <p>Limited-time festivals with multi-stage rewards — like Family Farm Seaside.</p>
+      </div>
+
+      {event ? (
+        <div className="recipe-card highlight">
+          <div className="recipe-top">
+            <span className="big-emoji">{event.emoji}</span>
+            <div>
+              <strong>{event.name}</strong>
+              <p className="muted">
+                {eventExpired
+                  ? 'Expired'
+                  : `Stage ${eventStageIndex + 1}/${event.stages.length} · Ends in ${formatLeft((eventEndsAt ?? now) - now)}`}
+              </p>
+            </div>
+          </div>
+          <div className="event-stages">
+            {event.stages.map((stage, i) => {
+              const done = i < eventStageIndex
+              const active = i === eventStageIndex
+              return (
+                <div
+                  key={stage.id}
+                  className={`event-stage${done ? ' done' : ''}${active ? ' active' : ''}`}
+                >
+                  <strong>{stage.name}</strong>
+                  {done && <span className="stage-check"> ✓</span>}
+                  {active && currentStage && (
+                    <p className="muted small">{currentStage.story}</p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {currentStage && !eventExpired && (
+            <>
+              <GoalList
+                goals={currentStage.goals}
+                parentId={stageParentId}
+                progress={eventProgress}
+              />
+              <p className="unlock-line">
+                Stage reward:
+                {currentStage.rewards.rewardCoins
+                  ? ` 🪙 ${currentStage.rewards.rewardCoins}`
+                  : ''}
+                {currentStage.rewards.rewardXp
+                  ? ` · ⭐ ${currentStage.rewards.rewardXp} XP`
+                  : ''}
+                {currentStage.rewards.unlocks?.length
+                  ? ` · 🔓 ${currentStage.rewards.unlocks.map(unlockLabel).join(', ')}`
+                  : ''}
+              </p>
+            </>
+          )}
+          <button
+            type="button"
+            className="btn full"
+            disabled={!stageDone && !eventExpired}
+            onClick={claimEvent}
+          >
+            {eventExpired
+              ? 'Dismiss'
+              : stageDone
+                ? eventStageIndex + 1 >= (event.stages.length ?? 0)
+                  ? 'Claim finale'
+                  : `Claim stage ${eventStageIndex + 1}`
+                : 'Event active…'}
+          </button>
+        </div>
+      ) : (
+        <div className="card-list">
+          {EVENTS.map((ev) => {
+            const done = completedEvents.includes(ev.id)
+            return (
+              <div key={ev.id} className="recipe-card">
+                <div className="recipe-top">
+                  <span className="big-emoji">{ev.emoji}</span>
+                  <div>
+                    <strong>{ev.name}</strong>
+                    <p className="muted">{ev.blurb}</p>
+                    <p className="muted small">
+                      {ev.stages.length} stages
+                      {ev.finaleReward?.rewardSeeds
+                        ? ' · seed rewards'
+                        : ''}
+                      {ev.stages.some((s) => s.rewards.unlocks?.length)
+                        ? ' · unlock rewards'
+                        : ''}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn full"
+                  disabled={done}
+                  onClick={() => startEvent(ev.id)}
+                >
+                  {done ? 'Completed' : `Start · ${formatLeft(ev.durationMs)}`}
+                </button>
+              </div>
+            )
+          })}
+        </div>
       )}
     </div>
   )
@@ -2630,6 +2728,7 @@ export default function App() {
         <TopBar />
         <main className="main">
           {tab === 'missions' && <MissionsView />}
+          {tab === 'events' && <EventsView />}
           {tab === 'farm' && <FarmView />}
           {tab === 'machines' && <MachinesView />}
           {tab === 'animals' && <AnimalsView />}

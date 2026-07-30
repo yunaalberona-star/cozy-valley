@@ -23,7 +23,10 @@ import {
   EVENTS,
   MISSION_BY_ID,
   MISSIONS,
-  pickNextMission,
+  eventStageGoals,
+  eventStageParentId,
+  isMissionLevelGated,
+  resolveActiveMission,
 } from './data/missions'
 import { LEGACY_MISSION_ID_MAP } from './data/missionChain'
 import { unlocksCrossingLevels, unlocksForLevel } from './data/levelUnlocks'
@@ -62,6 +65,7 @@ import type {
   CraftJob,
   CraftResourceId,
   CropId,
+  EventStageReward,
   GearBuildingId,
   GearCraftJob,
   GearInstance,
@@ -574,10 +578,66 @@ function withMissionProgress<T extends MissionProgressSlice>(
   }
 }
 
+function addSeeds(
+  seeds: Partial<Record<CropId, number>>,
+  items?: Partial<Record<CropId, number>>,
+): Partial<Record<CropId, number>> {
+  if (!items) return seeds
+  let next = { ...seeds }
+  for (const [id, qty] of Object.entries(items)) {
+    next[id as CropId] = (next[id as CropId] ?? 0) + (qty ?? 0)
+  }
+  return next
+}
+
+function applyStageRewards(
+  state: Pick<GameState, 'coins' | 'inventory' | 'seeds' | 'unlocked'>,
+  rewards: EventStageReward,
+): Pick<GameState, 'coins' | 'inventory' | 'seeds' | 'unlocked'> {
+  return {
+    coins: state.coins + (rewards.rewardCoins ?? 0),
+    inventory: addItems(state.inventory, rewards.rewardItems),
+    seeds: addSeeds(state.seeds, rewards.rewardSeeds),
+    unlocked: [...new Set([...state.unlocked, ...(rewards.unlocks ?? [])])],
+  }
+}
+
+function ensureActiveMission(
+  completedMissions: string[],
+  playerLevel: number,
+  activeMissionId: string | null,
+  existingProgress?: Record<string, number>,
+): { activeMissionId: string | null; missionProgress: Record<string, number> } {
+  const completed = completedMissions
+  const activeMission = activeMissionId ? MISSION_BY_ID[activeMissionId] : undefined
+  const activeOk =
+    activeMission &&
+    !completed.includes(activeMissionId!) &&
+    (!activeMission.requires || completed.includes(activeMission.requires))
+  if (activeOk) {
+    return {
+      activeMissionId,
+      missionProgress:
+        existingProgress ?? emptyProgress(activeMission.goals, activeMission.id),
+    }
+  }
+  const next = resolveActiveMission(completed, playerLevel, MISSIONS)
+  return {
+    activeMissionId: next?.id ?? null,
+    missionProgress: next ? emptyProgress(next.goals, next.id) : {},
+  }
+}
+
 function emptyProgress(goals: MissionGoal[], id: string): Record<string, number> {
   const out: Record<string, number> = {}
   for (const g of goals) out[goalKey(id, g.id)] = 0
   return out
+}
+
+function emptyEventProgress(eventId: string, stageIndex: number): Record<string, number> {
+  const event = EVENT_BY_ID[eventId]
+  const goals = event ? eventStageGoals(event, stageIndex) : []
+  return emptyProgress(goals, eventStageParentId(eventId, stageIndex))
 }
 
 function firstMissionId(): string {
@@ -659,18 +719,46 @@ function migrateSaveState(
     const level = levelFromXp(xp)
     state.unlocked = syncLevelUnlocks(xp, (state.unlocked as UnlockId[]) ?? [])
     const completed = (state.completedMissions as string[]) ?? []
-    const activeId = state.activeMissionId as string | null
-    const activeMission = activeId ? MISSION_BY_ID[activeId] : undefined
-    const activeOk =
-      activeMission &&
-      !completed.includes(activeId!) &&
-      (activeMission.minLevel ?? 1) <= level
-    if (!activeOk) {
-      const next = pickNextMission(completed, level, MISSIONS)
-      state.activeMissionId = next?.id ?? null
-      state.missionProgress = next
-        ? emptyProgress(next.goals, next.id)
-        : {}
+    const missionFix = ensureActiveMission(
+      completed,
+      level,
+      (state.activeMissionId as string | null) ?? null,
+      state.missionProgress as Record<string, number> | undefined,
+    )
+    state.activeMissionId = missionFix.activeMissionId
+    state.missionProgress = missionFix.missionProgress
+  }
+  if (version < 10) {
+    const xp = typeof state.xp === 'number' ? state.xp : 0
+    const level = levelFromXp(xp)
+    const completed = (state.completedMissions as string[]) ?? []
+    const missionFix = ensureActiveMission(
+      completed,
+      level,
+      (state.activeMissionId as string | null) ?? null,
+      state.missionProgress as Record<string, number> | undefined,
+    )
+    state.activeMissionId = missionFix.activeMissionId
+    state.missionProgress = missionFix.missionProgress
+    if (typeof state.eventStageIndex !== 'number') {
+      state.eventStageIndex = 0
+    }
+    if (state.activeEventId) {
+      const eventId = state.activeEventId as string
+      const event = EVENT_BY_ID[eventId]
+      if (event?.stages?.length) {
+        const stageIndex = Math.min(
+          (state.eventStageIndex as number) || 0,
+          event.stages.length - 1,
+        )
+        state.eventStageIndex = stageIndex
+        state.eventProgress = emptyEventProgress(eventId, stageIndex)
+      } else {
+        state.activeEventId = null
+        state.eventEndsAt = null
+        state.eventProgress = {}
+        state.eventStageIndex = 0
+      }
     }
   }
   return state
@@ -751,6 +839,7 @@ export interface GameState {
   missionProgress: Record<string, number>
   activeEventId: string | null
   eventEndsAt: number | null
+  eventStageIndex: number
   eventProgress: Record<string, number>
   completedEvents: string[]
   selectedBuilding: BuildingId | null
@@ -868,6 +957,7 @@ const initial = () => {
     missionProgress: mission ? emptyProgress(mission.goals, missionId) : {},
     activeEventId: null as string | null,
     eventEndsAt: null as number | null,
+    eventStageIndex: 0,
     eventProgress: {} as Record<string, number>,
     completedEvents: [] as string[],
     selectedBuilding: null as BuildingId | null,
@@ -1119,7 +1209,8 @@ export const useGame = create<GameState>()(
 
         if (s.activeMissionId) {
           const mission = MISSION_BY_ID[s.activeMissionId]
-          if (mission) {
+          const playerLevel = levelFromXp(s.xp)
+          if (mission && !isMissionLevelGated(mission, playerLevel)) {
             missionProgress = bumpGoals(
               missionProgress,
               mission.goals,
@@ -1134,15 +1225,19 @@ export const useGame = create<GameState>()(
         if (s.activeEventId && s.eventEndsAt && Date.now() < s.eventEndsAt) {
           const event = EVENT_BY_ID[s.activeEventId]
           if (event) {
-            const value = kind === 'own_coins' ? s.coins : amount
-            eventProgress = bumpGoals(
-              eventProgress,
-              event.goals,
-              s.activeEventId,
-              kind,
-              target,
-              value,
-            )
+            const stage = event.stages[s.eventStageIndex]
+            if (stage) {
+              const parentId = eventStageParentId(s.activeEventId, s.eventStageIndex)
+              const value = kind === 'own_coins' ? s.coins : amount
+              eventProgress = bumpGoals(
+                eventProgress,
+                stage.goals,
+                parentId,
+                kind,
+                target,
+                value,
+              )
+            }
           }
         }
 
@@ -1829,7 +1924,7 @@ export const useGame = create<GameState>()(
         )
         const completedMissions = [...s.completedMissions, id]
         const playerLevel = levelFromXp(s.xp + mission.rewardXp)
-        const next = pickNextMission(completedMissions, playerLevel, MISSIONS)
+        const next = resolveActiveMission(completedMissions, playerLevel, MISSIONS)
         const xpResult = applyXpGain(
           s.xp,
           mission.rewardXp,
@@ -1872,7 +1967,8 @@ export const useGame = create<GameState>()(
         set({
           activeEventId: eventId,
           eventEndsAt: Date.now() + event.durationMs,
-          eventProgress: emptyProgress(event.goals, eventId),
+          eventStageIndex: 0,
+          eventProgress: emptyEventProgress(eventId, 0),
           toast: `${event.name} started!`,
         })
       },
@@ -1887,54 +1983,98 @@ export const useGame = create<GameState>()(
           set({
             activeEventId: null,
             eventEndsAt: null,
+            eventStageIndex: 0,
             eventProgress: {},
             toast: 'Event expired',
           })
           return
         }
-        const done = event.goals.every(
-          (g) => (s.eventProgress[goalKey(id, g.id)] ?? 0) >= g.amount,
+        const stageIndex = s.eventStageIndex
+        const stage = event.stages[stageIndex]
+        if (!stage) return
+        const parentId = eventStageParentId(id, stageIndex)
+        const stageDone = stage.goals.every(
+          (g) => (s.eventProgress[goalKey(parentId, g.id)] ?? 0) >= g.amount,
         )
-        if (!done) {
-          set({ toast: 'Finish all event goals first' })
+        if (!stageDone) {
+          set({ toast: 'Finish all stage goals first' })
           return
         }
-        const unlocked = [
-          ...new Set([...s.unlocked, ...(event.unlocks ?? [])]),
-        ]
-        const freshUnlocks = newUnlocks(s.unlocked, unlocked)
+        const rewardPatch = applyStageRewards(s, stage.rewards)
+        const freshUnlocks = newUnlocks(s.unlocked, rewardPatch.unlocked)
+        let xpGain = stage.rewards.rewardXp ?? 0
+        let coins = rewardPatch.coins
+        let inventory = rewardPatch.inventory
+        let seeds = rewardPatch.seeds
+        let unlocked = rewardPatch.unlocked
+        const nextStageIndex = stageIndex + 1
+        const isLastStage = nextStageIndex >= event.stages.length
+        if (isLastStage && event.finaleReward) {
+          const finale = applyStageRewards(
+            { ...s, ...rewardPatch },
+            event.finaleReward,
+          )
+          coins = finale.coins
+          inventory = finale.inventory
+          seeds = finale.seeds
+          unlocked = finale.unlocked
+          xpGain += event.finaleReward.rewardXp ?? 0
+        }
         const xpResult = applyXpGain(
           s.xp,
-          event.rewardXp,
+          xpGain,
           s.popupQueue,
           unlocked,
           s.activeOrders,
-          s.seeds,
+          seeds,
         )
         const guides = unlockGuidePatch(
           s,
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        if (isLastStage) {
+          set({
+            coins,
+            xp: xpResult.xp,
+            seeds: xpResult.seeds,
+            unlocked: xpResult.unlocked,
+            inventory,
+            activeOrders: xpResult.activeOrders,
+            guideTabPulses: guides.guideTabPulses,
+            guideItemHighlights: guides.guideItemHighlights,
+            completedEvents: [...s.completedEvents, id],
+            activeEventId: null,
+            eventEndsAt: null,
+            eventStageIndex: 0,
+            eventProgress: {},
+            popupQueue: enqueuePopups(
+              xpResult.popupQueue,
+              unlockPopup(freshUnlocks, `${event.name} — stage complete`),
+            ),
+            toast: `Event complete! +${coins - s.coins} coins`,
+          })
+          get().track('own_coins', undefined, get().coins)
+          return
+        }
         set({
-          coins: s.coins + event.rewardCoins,
+          coins,
           xp: xpResult.xp,
           seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
-          inventory: addItems(s.inventory, event.rewardItems),
+          inventory,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          completedEvents: [...s.completedEvents, id],
-          activeEventId: null,
-          eventEndsAt: null,
-          eventProgress: {},
+          eventStageIndex: nextStageIndex,
+          eventProgress: emptyEventProgress(id, nextStageIndex),
           popupQueue: enqueuePopups(
             xpResult.popupQueue,
-            unlockPopup(freshUnlocks, 'Event reward'),
+            unlockPopup(freshUnlocks, `${stage.name} complete`),
           ),
-          toast: `Event complete! +${event.rewardCoins} coins`,
+          toast: `${stage.name} complete — next stage unlocked!`,
         })
+        get().track('own_coins', undefined, get().coins)
       },
 
       recruitNpc: (npcId) => {
@@ -2203,6 +2343,27 @@ export const useGame = create<GameState>()(
       onRehydrateStorage: () => (state, error) => {
         if (error || !state) return
         state.unlocked = syncLevelUnlocks(state.xp, state.unlocked ?? [])
+        const level = levelFromXp(state.xp)
+        if (!state.activeMissionId) {
+          const fix = ensureActiveMission(
+            state.completedMissions ?? [],
+            level,
+            null,
+          )
+          state.activeMissionId = fix.activeMissionId
+          state.missionProgress = fix.missionProgress
+        } else {
+          const fix = ensureActiveMission(
+            state.completedMissions ?? [],
+            level,
+            state.activeMissionId,
+            state.missionProgress,
+          )
+          if (fix.activeMissionId !== state.activeMissionId) {
+            state.activeMissionId = fix.activeMissionId
+            state.missionProgress = fix.missionProgress
+          }
+        }
         if (!state.activeMissionId) return
         const mission = MISSION_BY_ID[state.activeMissionId]
         if (!mission) return
@@ -2241,6 +2402,7 @@ export const useGame = create<GameState>()(
         missionProgress: s.missionProgress,
         activeEventId: s.activeEventId,
         eventEndsAt: s.eventEndsAt,
+        eventStageIndex: s.eventStageIndex,
         eventProgress: s.eventProgress,
         completedEvents: s.completedEvents,
         selectedBuilding: s.selectedBuilding,
