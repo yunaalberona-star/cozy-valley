@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ANIMALS } from './game/data/animals'
 import { ANIMAL_BUILDINGS } from './game/data/animalBuildings'
 import {
@@ -1558,6 +1558,94 @@ function GlobalChatDock() {
   )
 }
 
+function clampMarketNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function parseMarketDraft(raw: string, min: number, max: number): number {
+  const trimmed = raw.trim()
+  if (trimmed === '') return min
+  const n = Number(trimmed)
+  if (!Number.isFinite(n)) return min
+  return clampMarketNumber(n, min, max)
+}
+
+function MarketNumberStepper({
+  value,
+  min,
+  max,
+  onChange,
+  label,
+  hint,
+  id,
+}: {
+  value: number
+  min: number
+  max: number
+  onChange: (next: number) => void
+  label: ReactNode
+  hint?: string
+  id?: string
+}) {
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  const commitDraft = (raw: string) => {
+    const next = parseMarketDraft(raw, min, max)
+    onChange(next)
+    setDraft(String(next))
+  }
+
+  const step = (delta: number) => {
+    const next = clampMarketNumber(value + delta, min, max)
+    onChange(next)
+    setDraft(String(next))
+  }
+
+  return (
+    <label className="market-field" htmlFor={id}>
+      {label}
+      <div className="market-stepper">
+        <button
+          type="button"
+          className="btn tiny market-stepper-btn"
+          disabled={value <= min}
+          aria-label="Decrease"
+          onClick={() => step(-1)}
+        >
+          −
+        </button>
+        <input
+          id={id}
+          className="market-input market-stepper-input"
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, ''))}
+          onBlur={() => commitDraft(draft)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitDraft(draft)
+          }}
+        />
+        <button
+          type="button"
+          className="btn tiny market-stepper-btn"
+          disabled={value >= max}
+          aria-label="Increase"
+          onClick={() => step(1)}
+        >
+          +
+        </button>
+      </div>
+      {hint && <span className="muted small market-stepper-hint">{hint}</span>}
+    </label>
+  )
+}
+
 function MarketView() {
   const inventory = useGame((s) => s.inventory)
   const seeds = useGame((s) => s.seeds)
@@ -1599,10 +1687,11 @@ function MarketView() {
   }, [isMarketOpen])
 
   useEffect(() => {
-    if (!selectedPost || !priceBounds) return
+    if (!selectedPost) return
+    const bounds = marketPriceBounds(selectedPost.kind, selectedPost.id)
     setPostQty(1)
-    setPostPrice(priceBounds.base)
-  }, [selectedPost?.kind, selectedPost?.id, priceBounds?.base])
+    setPostPrice(bounds.min)
+  }, [selectedPost?.kind, selectedPost?.id])
 
   if (!isMarketOpen()) {
     return (
@@ -1653,13 +1742,21 @@ function MarketView() {
   const browseListings = listings.filter((l) => l.seller_id !== playerId)
 
   const handlePost = async () => {
-    if (!selectedPost || busy) return
+    if (!selectedPost || busy || !priceBounds) return
+    const qty = clampMarketNumber(postQty, 1, selectedPost.qty)
+    const price = clampMarketNumber(
+      postPrice,
+      priceBounds.min,
+      priceBounds.max,
+    )
+    setPostQty(qty)
+    setPostPrice(price)
     setBusy(true)
     await createMarketListing(
       selectedPost.kind,
       selectedPost.id,
-      postQty,
-      postPrice,
+      qty,
+      price,
     )
     setBusy(false)
   }
@@ -1774,46 +1871,37 @@ function MarketView() {
                   ))}
                 </select>
               </label>
-              <label className="market-field">
-                Quantity
-                <input
-                  className="market-input"
-                  type="number"
-                  min={1}
-                  max={selectedPost?.qty ?? 1}
-                  value={postQty}
-                  onChange={(e) =>
-                    setPostQty(
-                      Math.max(
-                        1,
-                        Math.min(
-                          selectedPost?.qty ?? 1,
-                          Number(e.target.value) || 1,
-                        ),
-                      ),
-                    )
-                  }
-                />
-              </label>
-              <label className="market-field">
-                Price per unit
-                {priceBounds && (
-                  <span className="muted">
-                    {' '}
-                    ({priceBounds.min}–{priceBounds.max})
-                  </span>
-                )}
-                <input
-                  className="market-input"
-                  type="number"
-                  min={priceBounds?.min ?? 1}
-                  max={priceBounds?.max ?? 9999}
-                  value={postPrice}
-                  onChange={(e) =>
-                    setPostPrice(Math.max(1, Number(e.target.value) || 1))
-                  }
-                />
-              </label>
+              <MarketNumberStepper
+                id="market-post-qty"
+                label="Quantity"
+                min={1}
+                max={selectedPost?.qty ?? 1}
+                value={postQty}
+                onChange={setPostQty}
+              />
+              <MarketNumberStepper
+                id="market-post-price"
+                label={
+                  <>
+                    Price per unit
+                    {priceBounds && (
+                      <span className="muted">
+                        {' '}
+                        ({priceBounds.min}–{priceBounds.max})
+                      </span>
+                    )}
+                  </>
+                }
+                hint={
+                  priceBounds
+                    ? `Suggested 🪙 ${priceBounds.base} · min ${priceBounds.min}, max ${priceBounds.max}`
+                    : undefined
+                }
+                min={priceBounds?.min ?? 1}
+                max={priceBounds?.max ?? 9999}
+                value={postPrice}
+                onChange={setPostPrice}
+              />
               <button
                 type="button"
                 className="btn full"

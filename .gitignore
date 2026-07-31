@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Personal dev-only helpers (never deploy)
+src/dev/localDev.private.ts

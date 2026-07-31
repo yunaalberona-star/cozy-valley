@@ -2,7 +2,11 @@ import { useGame } from '../game/store'
 
 declare global {
   interface Window {
-    __cozyDev?: { setLevel: (level: number) => void }
+    __cozyDev?: {
+      setLevel: (level: number) => void
+      addCoins?: (amount: number) => void
+      purchaseAll?: () => void
+    }
   }
 }
 

@@ -1553,6 +1553,32 @@ html.theme-dark .toast {
   margin-bottom: 12px;
 }
 
+.market-stepper {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.market-stepper-input {
+  margin-top: 0;
+  text-align: center;
+}
+
+.market-stepper-btn {
+  min-width: 40px;
+  padding: 8px 10px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.market-stepper-hint {
+  display: block;
+  margin-top: 4px;
+  font-weight: 600;
+}
+
 .app-bottom {
   display: flex;
   flex-direction: column;
