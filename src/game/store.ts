@@ -467,6 +467,47 @@ function goalKey(missionOrEventId: string, goalId: string): string {
   return `${missionOrEventId}:${goalId}`
 }
 
+function legacyGoalId(kind: MissionGoal['kind']): string | null {
+  switch (kind) {
+    case 'harvest':
+      return 'g_harvest'
+    case 'craft':
+      return 'g_craft'
+    case 'collect_animal':
+      return 'g_collect'
+    case 'buy_animal':
+      return 'g_buy'
+    default:
+      return null
+  }
+}
+
+function migrateMissionProgress(
+  missionId: string,
+  oldProgress: Record<string, number>,
+): Record<string, number> {
+  const mission = MISSION_BY_ID[missionId]
+  if (!mission) return oldProgress
+  const next = emptyProgress(mission.goals, mission.id)
+  for (const g of mission.goals) {
+    const newKey = goalKey(mission.id, g.id)
+    if (oldProgress[newKey] != null) {
+      next[newKey] = oldProgress[newKey]
+      continue
+    }
+    const legacyId = legacyGoalId(g.kind)
+    if (!legacyId) continue
+    const legacyKey = goalKey(mission.id, legacyId)
+    const legacyVal = oldProgress[legacyKey] ?? 0
+    if (legacyVal <= 0) continue
+    const sameKind = mission.goals.filter((x) => x.kind === g.kind)
+    if (sameKind.length === 1) {
+      next[newKey] = Math.min(g.amount, legacyVal)
+    }
+  }
+  return next
+}
+
 function isMissionComplete(
   missionId: string,
   progress: Record<string, number>,
@@ -843,6 +884,25 @@ function migrateSaveState(
     }
     if (state.materialsPane !== 'mountain' && state.materialsPane !== 'forest') {
       state.materialsPane = 'mountain'
+    }
+  }
+  if (version < 15) {
+    const activeMissionId = state.activeMissionId as string | null | undefined
+    if (activeMissionId && state.missionProgress) {
+      state.missionProgress = migrateMissionProgress(
+        activeMissionId,
+        state.missionProgress as Record<string, number>,
+      )
+      if (
+        !isMissionComplete(
+          activeMissionId,
+          state.missionProgress as Record<string, number>,
+        )
+      ) {
+        state.popupQueue = ((state.popupQueue as PopupState[]) ?? []).filter(
+          (p) => p.kind !== 'mission_claim',
+        )
+      }
     }
   }
   return state
@@ -2099,7 +2159,6 @@ export const useGame = create<GameState>()(
             unclaimedMarketSales: get().unclaimedMarketSales.filter(
               (sale) => sale.payoutId !== payoutId,
             ),
-            toast: `Claimed sale · +🪙 ${amount}`,
           })
           get().track('own_coins', undefined, get().coins)
           return true

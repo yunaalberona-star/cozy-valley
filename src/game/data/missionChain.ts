@@ -159,7 +159,7 @@ function missionId(n: number): string {
 function goalHarvest(cropId: ItemId, amount: number): MissionGoal {
   const crop = CROP_LIST.find((c) => c.id === cropId)
   return {
-    id: 'g_harvest',
+    id: `g_harvest_${cropId}`,
     kind: 'harvest',
     target: cropId,
     amount,
@@ -170,7 +170,7 @@ function goalHarvest(cropId: ItemId, amount: number): MissionGoal {
 function goalCraft(itemId: ItemId, amount: number): MissionGoal {
   const meta = ITEM_META[itemId]
   return {
-    id: 'g_craft',
+    id: `g_craft_${itemId}`,
     kind: 'craft',
     target: itemId,
     amount,
@@ -181,7 +181,7 @@ function goalCraft(itemId: ItemId, amount: number): MissionGoal {
 function goalCollect(product: ItemId, amount: number): MissionGoal {
   const meta = ITEM_META[product]
   return {
-    id: 'g_collect',
+    id: `g_collect_${product}`,
     kind: 'collect_animal',
     target: product,
     amount,
@@ -192,7 +192,7 @@ function goalCollect(product: ItemId, amount: number): MissionGoal {
 function goalBuy(animalId: AnimalTypeId, amount: number): MissionGoal {
   const def = ANIMALS[animalId]
   return {
-    id: 'g_buy',
+    id: `g_buy_${animalId}`,
     kind: 'buy_animal',
     target: animalId,
     amount,
