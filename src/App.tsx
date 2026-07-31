@@ -79,6 +79,7 @@ import {
   setPlayerName,
   subscribeToChat,
   subscribeToListings,
+  subscribeToSellerPayouts,
   type ChatMessage,
   type MarketListing,
 } from './game/marketClient'
@@ -1066,28 +1067,44 @@ function AnimalsView() {
             const locked = !unlocked.includes(b.id)
             const animalDef = ANIMALS[b.animalTypeId]
             const count = animals.filter((a) => a.typeId === b.animalTypeId).length
+            const canBuy =
+              !locked && count < animalDef.maxOwned && coins >= animalDef.buyCost
             return (
-              <button
+              <div
                 key={b.id}
-                type="button"
-                className={`machine-card ${locked ? 'locked' : ''} ${!locked && guideItemHighlights.includes(b.id) ? 'guide-pulse-frame' : ''}`}
-                disabled={locked}
-                onClick={() => selectAnimalBuilding(b.id)}
+                className={`machine-card ${locked ? 'locked' : ''} ${canBuy ? 'for-sale' : ''} ${!locked && guideItemHighlights.includes(b.id) ? 'guide-pulse-frame' : ''}`}
               >
-                <span className="big-emoji">{b.emoji}</span>
-                <strong>{b.name}</strong>
-                <small>
-                  {locked
-                    ? '🔒 Mission lock'
-                    : `${count}/${animalDef.maxOwned} ${animalDef.name}s · ${
-                        animalDef.materialProduct
-                          ? `${MATERIAL_META[animalDef.materialProduct].emoji} ${MATERIAL_META[animalDef.materialProduct].name}`
-                          : animalDef.product
-                            ? `${ITEM_META[animalDef.product].emoji} ${ITEM_META[animalDef.product].name}`
-                            : '—'
-                      }`}
-                </small>
-              </button>
+                <button
+                  type="button"
+                  className="machine-card-main"
+                  disabled={locked}
+                  onClick={() => !locked && selectAnimalBuilding(b.id)}
+                >
+                  <span className="big-emoji">{b.emoji}</span>
+                  <strong>{b.name}</strong>
+                  <small>
+                    {locked
+                      ? '🔒 Mission lock'
+                      : `${count}/${animalDef.maxOwned} ${animalDef.name}s · ${
+                          animalDef.materialProduct
+                            ? `${MATERIAL_META[animalDef.materialProduct].emoji} ${MATERIAL_META[animalDef.materialProduct].name}`
+                            : animalDef.product
+                              ? `${ITEM_META[animalDef.product].emoji} ${ITEM_META[animalDef.product].name}`
+                              : '—'
+                        }`}
+                  </small>
+                </button>
+                {!locked && count < animalDef.maxOwned && (
+                  <button
+                    type="button"
+                    className="btn full"
+                    disabled={coins < animalDef.buyCost}
+                    onClick={() => buyAnimal(animalDef.id as AnimalTypeId)}
+                  >
+                    Buy {animalDef.name} · 🪙 {animalDef.buyCost}
+                  </button>
+                )}
+              </div>
             )
           })}
         </div>
@@ -1656,7 +1673,9 @@ function MarketView() {
   const createMarketListing = useGame((s) => s.createMarketListing)
   const buyMarketListing = useGame((s) => s.buyMarketListing)
   const cancelMarketListing = useGame((s) => s.cancelMarketListing)
-  const syncMarketPayouts = useGame((s) => s.syncMarketPayouts)
+  const refreshMarketSales = useGame((s) => s.refreshMarketSales)
+  const claimMarketSale = useGame((s) => s.claimMarketSale)
+  const unclaimedMarketSales = useGame((s) => s.unclaimedMarketSales)
   const { level } = xpProgress(xp)
 
   const [listings, setListings] = useState<MarketListing[]>([])
@@ -1677,8 +1696,8 @@ function MarketView() {
 
   useEffect(() => {
     if (!isMarketOpen()) return
-    void syncMarketPayouts()
-  }, [isMarketOpen, syncMarketPayouts])
+    void refreshMarketSales()
+  }, [isMarketOpen, refreshMarketSales])
 
   useEffect(() => {
     if (!isMarketOpen() || !isSupabaseConfigured()) return
@@ -1740,6 +1759,7 @@ function MarketView() {
 
   const myListings = listings.filter((l) => l.seller_id === playerId)
   const browseListings = listings.filter((l) => l.seller_id !== playerId)
+  const hasUnclaimedSales = unclaimedMarketSales.length > 0
 
   const handlePost = async () => {
     if (!selectedPost || busy || !priceBounds) return
@@ -1775,6 +1795,13 @@ function MarketView() {
     setBusy(false)
   }
 
+  const handleClaimSale = async (payoutId: string) => {
+    if (busy) return
+    setBusy(true)
+    await claimMarketSale(payoutId)
+    setBusy(false)
+  }
+
   return (
     <div className="panel">
       <div className="panel-head">
@@ -1803,10 +1830,11 @@ function MarketView() {
           type="button"
           role="tab"
           aria-selected={marketPane === 'sell'}
-          className={marketPane === 'sell' ? 'active' : ''}
+          className={`${marketPane === 'sell' ? 'active' : ''} ${hasUnclaimedSales ? 'market-sale-pulse' : ''}`}
           onClick={() => setMarketPane('sell')}
         >
           📤 Sell
+          {hasUnclaimedSales ? ` (${unclaimedMarketSales.length})` : ''}
         </button>
       </div>
 
@@ -1911,6 +1939,41 @@ function MarketView() {
                 Post listing
               </button>
             </div>
+          )}
+
+          {hasUnclaimedSales && (
+            <>
+              <h3 className="section-label">Sold — tap to claim</h3>
+              <div className="card-list">
+                {unclaimedMarketSales.map(({ payoutId, amount, listing }) => {
+                  const meta = marketItemLabel(listing.item_kind, listing.item_id)
+                  return (
+                    <div
+                      key={payoutId}
+                      className="recipe-card market-sale-claim market-sale-pulse"
+                    >
+                      <div className="recipe-top">
+                        <span className="big-emoji">{meta.emoji}</span>
+                        <div>
+                          <strong>
+                            Sold {listing.quantity}× {meta.name}
+                          </strong>
+                          <p className="muted">Claim your coins from this sale</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn full"
+                        disabled={busy}
+                        onClick={() => void handleClaimSale(payoutId)}
+                      >
+                        Claim · 🪙 {amount}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
           )}
 
           <h3 className="section-label">Your listings</h3>
@@ -3122,17 +3185,22 @@ function TabNav() {
   const setTab = useGame((s) => s.setTab)
   const guideTabPulses = useGame((s) => s.guideTabPulses)
   const contextGuideTab = useGame((s) => s.contextGuideTab)
+  const unclaimedMarketSales = useGame((s) => s.unclaimedMarketSales)
+  const marketSalePulse = unclaimedMarketSales.length > 0
   return (
     <nav className="tabnav" aria-label="Main">
       {TABS.map((t) => (
         <button
           key={t.id}
           type="button"
-          className={`${tab === t.id ? 'active' : ''} ${tabShouldPulse(t.id, guideTabPulses, contextGuideTab) ? 'guide-pulse-frame' : ''}`}
+          className={`${tab === t.id ? 'active' : ''} ${tabShouldPulse(t.id, guideTabPulses, contextGuideTab) ? 'guide-pulse-frame' : ''} ${t.id === 'market' && marketSalePulse ? 'market-sale-pulse' : ''}`}
           onClick={() => setTab(t.id)}
         >
           <span aria-hidden>{t.emoji}</span>
           {t.label}
+          {t.id === 'market' && marketSalePulse
+            ? ` (${unclaimedMarketSales.length})`
+            : ''}
         </button>
       ))}
     </nav>
@@ -3142,15 +3210,19 @@ function TabNav() {
 export default function App() {
   const tab = useGame((s) => s.tab)
   const darkMode = useGame((s) => s.darkMode)
-  const syncMarketPayouts = useGame((s) => s.syncMarketPayouts)
+  const refreshMarketSales = useGame((s) => s.refreshMarketSales)
 
   useEffect(() => {
     document.documentElement.classList.toggle('theme-dark', darkMode)
   }, [darkMode])
 
   useEffect(() => {
-    void syncMarketPayouts()
-  }, [syncMarketPayouts])
+    if (!isSupabaseConfigured()) return
+    void refreshMarketSales()
+    return subscribeToSellerPayouts(getPlayerId(), () => {
+      void refreshMarketSales()
+    })
+  }, [refreshMarketSales])
 
   return (
     <div className={`app-shell ${darkMode ? 'theme-dark' : ''}`}>

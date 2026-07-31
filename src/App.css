@@ -1579,6 +1579,30 @@ html.theme-dark .toast {
   font-weight: 600;
 }
 
+.market-sale-pulse {
+  position: relative;
+}
+
+.market-sale-pulse::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border: 2px solid #4caf50;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: guide-pulse-blink 1.15s ease-in-out infinite;
+  box-shadow: 0 0 10px rgba(76, 175, 80, 0.45);
+}
+
+.tabnav button.market-sale-pulse::after,
+.pane-tabs button.market-sale-pulse::after {
+  border-radius: 12px;
+}
+
+.recipe-card.market-sale-claim {
+  border-color: rgba(76, 175, 80, 0.45);
+}
+
 .app-bottom {
   display: flex;
   flex-direction: column;

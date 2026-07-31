@@ -211,6 +211,74 @@ export async function createListing(
   return data as MarketListing
 }
 
+export interface MarketSaleClaim {
+  payoutId: string
+  amount: number
+  listing: MarketListing
+}
+
+export async function fetchUnclaimedSales(
+  sellerId: string,
+): Promise<MarketSaleClaim[]> {
+  const supabase = getClient()
+  const { data, error } = await supabase
+    .from('market_payouts')
+    .select('id, amount, listing_id')
+    .eq('seller_id', sellerId)
+    .eq('claimed', false)
+    .order('created_at', { ascending: false })
+
+  if (error) throw wrapError(error)
+  const rows = data ?? []
+  const claims: MarketSaleClaim[] = []
+  for (const row of rows) {
+    if (!row.listing_id) continue
+    const listing = await fetchListingById(row.listing_id as string)
+    if (!listing) continue
+    claims.push({
+      payoutId: row.id as string,
+      amount: row.amount as number,
+      listing,
+    })
+  }
+  return claims
+}
+
+export async function claimSinglePayout(
+  payoutId: string,
+  sellerId: string,
+): Promise<number> {
+  const supabase = getClient()
+  const { data, error } = await supabase
+    .from('market_payouts')
+    .select('id, amount, seller_id, claimed')
+    .eq('id', payoutId)
+    .maybeSingle()
+
+  if (error) throw wrapError(error)
+  if (!data || data.seller_id !== sellerId) {
+    throw new MarketError('Payout not found.')
+  }
+  if (data.claimed) {
+    throw new MarketError('Already claimed.')
+  }
+
+  const { data: updated, error: claimError } = await supabase
+    .from('market_payouts')
+    .update({ claimed: true })
+    .eq('id', payoutId)
+    .eq('seller_id', sellerId)
+    .eq('claimed', false)
+    .select('amount')
+    .single()
+
+  if (claimError) throw wrapError(claimError)
+  if (!updated) {
+    throw new MarketError('Already claimed.')
+  }
+  return updated.amount as number
+}
+
 export async function buyListing(
   listing: MarketListing,
   buyerId: string,
@@ -272,28 +340,55 @@ export async function cancelListing(
   return data as MarketListing
 }
 
-export async function syncPayouts(sellerId: string): Promise<number> {
-  const supabase = getClient()
-  const { data, error } = await supabase
-    .from('market_payouts')
-    .select('id, amount')
-    .eq('seller_id', sellerId)
-    .eq('claimed', false)
+const PAYOUT_POLL_MS = 20_000
 
-  if (error) throw wrapError(error)
-  const rows = data ?? []
-  if (rows.length === 0) return 0
+export function subscribeToSellerPayouts(
+  sellerId: string,
+  callback: () => void,
+  _onError?: (err: MarketError) => void,
+): () => void {
+  if (!isSupabaseConfigured()) return () => {}
 
-  const total = rows.reduce((sum, row) => sum + (row.amount ?? 0), 0)
-  const ids = rows.map((row) => row.id)
+  let channel: RealtimeChannel | null = null
+  let pollId: ReturnType<typeof setInterval> | null = null
+  let stopped = false
 
-  const { error: claimError } = await supabase
-    .from('market_payouts')
-    .update({ claimed: true })
-    .in('id', ids)
+  const refresh = () => {
+    if (!stopped) callback()
+  }
 
-  if (claimError) throw wrapError(claimError)
-  return total
+  try {
+    const supabase = getClient()
+    channel = supabase
+      .channel(`market_payouts_${sellerId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'market_payouts',
+          filter: `seller_id=eq.${sellerId}`,
+        },
+        () => refresh(),
+      )
+      .subscribe()
+  } catch {
+    // Realtime unavailable — polling only
+  }
+
+  pollId = setInterval(refresh, PAYOUT_POLL_MS)
+
+  return () => {
+    stopped = true
+    if (pollId != null) clearInterval(pollId)
+    if (channel) {
+      try {
+        getClient().removeChannel(channel)
+      } catch {
+        // ignore
+      }
+    }
+  }
 }
 
 const POLL_MS = 30_000

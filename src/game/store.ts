@@ -57,13 +57,15 @@ import {
   MarketError,
   buyListing,
   cancelListing,
+  claimSinglePayout,
   createListing,
   fetchListingById,
+  fetchUnclaimedSales,
   getPlayerId,
   getPlayerName,
   isSupabaseConfigured,
-  syncPayouts,
 } from './marketClient'
+import type { MarketSaleClaim } from './marketClient'
 import { mergeCropLevelGuides, mergeUnlockGuides, tabShouldPulse } from './guides'
 import {
   adoptLegacySaveIfNeeded,
@@ -942,6 +944,7 @@ export interface GameState {
   darkMode: boolean
   shopScrollTarget: CropId | null
   machineScrollTarget: string | null
+  unclaimedMarketSales: MarketSaleClaim[]
 
   setTab: (tab: TabId) => void
   selectCrop: (id: CropId) => void
@@ -997,7 +1000,8 @@ export interface GameState {
   ) => Promise<boolean>
   buyMarketListing: (listingId: string) => Promise<boolean>
   cancelMarketListing: (listingId: string) => Promise<boolean>
-  syncMarketPayouts: () => Promise<void>
+  refreshMarketSales: () => Promise<void>
+  claimMarketSale: (payoutId: string) => Promise<boolean>
 
   sellGoods: (id: ItemId, qty?: number) => void
   sellSeeds: (id: CropId, qty?: number) => void
@@ -1071,6 +1075,7 @@ const initial = () => {
     darkMode: false,
     shopScrollTarget: null as CropId | null,
     machineScrollTarget: null as string | null,
+    unclaimedMarketSales: [] as MarketSaleClaim[],
   }
 }
 
@@ -1703,7 +1708,6 @@ export const useGame = create<GameState>()(
         set({
           coins: s.coins - building.buyCost,
           ownedBuildings: [...s.ownedBuildings, id],
-          selectedBuilding: id,
           toast: `${building.name} built! Queue: ${BASE_MACHINE_QUEUE} slots`,
         })
         get().track('own_coins', undefined, get().coins)
@@ -2076,19 +2080,38 @@ export const useGame = create<GameState>()(
         }
       },
 
-      syncMarketPayouts: async () => {
+      refreshMarketSales: async () => {
         if (!isSupabaseConfigured()) return
         try {
-          const amount = await syncPayouts(getPlayerId())
-          if (amount > 0) {
-            set({
-              coins: get().coins + amount,
-              toast: `Market sales · +🪙 ${amount}`,
-            })
-            get().track('own_coins', undefined, get().coins)
-          }
+          const sales = await fetchUnclaimedSales(getPlayerId())
+          set({ unclaimedMarketSales: sales })
         } catch {
-          // Missing tables or offline — ignore on background sync
+          // Missing tables or offline — ignore background refresh
+        }
+      },
+
+      claimMarketSale: async (payoutId) => {
+        if (!isSupabaseConfigured()) return false
+        try {
+          const amount = await claimSinglePayout(payoutId, getPlayerId())
+          set({
+            coins: get().coins + amount,
+            unclaimedMarketSales: get().unclaimedMarketSales.filter(
+              (sale) => sale.payoutId !== payoutId,
+            ),
+            toast: `Claimed sale · +🪙 ${amount}`,
+          })
+          get().track('own_coins', undefined, get().coins)
+          return true
+        } catch (err) {
+          set({
+            toast:
+              err instanceof MarketError
+                ? err.message
+                : 'Could not claim sale',
+          })
+          void get().refreshMarketSales()
+          return false
         }
       },
 
