@@ -424,6 +424,15 @@ export interface ActiveOrder {
   slot: number
 }
 
+export interface ActiveShipOrder {
+  slot: number
+  itemId: ItemId
+  qty: number
+  rewardCoins: number
+  rewardXp: number
+  filled: boolean
+}
+
 export interface AnimalInstance {
   id: string
   typeId: AnimalTypeId
@@ -498,18 +507,34 @@ export interface GearStats {
   skillBonus: number
 }
 
+export interface GearRecipeUnlockReq {
+  blueprintId: string
+  craftsRequired: number
+}
+
+export interface GearBlueprintUnlock {
+  /** Available as soon as the workshop is open */
+  starter?: boolean
+  /** Unlock by crafting other recipes */
+  requires?: GearRecipeUnlockReq[]
+}
+
 export interface GearBlueprintDef {
   id: string
   buildingId: GearBuildingId
   name: string
   emoji: string
+  /** Optional PNG/SVG path (e.g. /icons/gear/pitchfork.png) — overrides emoji in UI */
+  icon?: string
   slot: GearSlot
   quality: GearQuality
   stats: GearStats
   inputs: Partial<Record<CraftResourceId, number>>
   craftMs: number
   xp: number
-  unlockLevel: number
+  unlock: GearBlueprintUnlock
+  /** 0–9 order in workshop chain (for drops / quality tuning) */
+  tier: number
 }
 
 export interface GearInstance {

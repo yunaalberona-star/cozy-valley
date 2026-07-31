@@ -25,19 +25,19 @@ export function rollAdventureGear(
   playerLevel: number,
   count: number,
   createId: () => string,
+  unlockedWorkshopIds: string[] = [],
 ): GearInstance[] {
-  const pool = GEAR_BLUEPRINTS.filter((b) => b.unlockLevel <= playerLevel)
+  const pool = GEAR_BLUEPRINTS.filter((b) => {
+    if (b.unlock.starter) return true
+    if (unlockedWorkshopIds.includes(b.buildingId) && b.tier <= 2) return true
+    return false
+  })
   if (pool.length === 0) return []
   const drops: GearInstance[] = []
   for (let i = 0; i < count; i++) {
     const bp = pool[Math.floor(Math.random() * pool.length)]!
-    const minLvl = bp.unlockLevel
-    const maxLvl = Math.max(minLvl, playerLevel)
-    const span = maxLvl - minLvl + 1
-    const level = minLvl + Math.floor(Math.random() * span)
-    drops.push(
-      createGearInstance(bp.id, level, 'drop', playerLevel, createId),
-    )
+    const level = Math.max(1, Math.min(playerLevel, 5 + bp.tier * 2))
+    drops.push(createGearInstance(bp.id, level, 'drop', playerLevel, createId))
   }
   return drops
 }

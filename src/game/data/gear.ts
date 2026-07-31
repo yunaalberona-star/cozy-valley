@@ -1,4 +1,10 @@
 import { ITEM_META } from './buildings'
+import { GEAR_BLUEPRINTS, GEAR_BLUEPRINT_BY_ID } from './gearBlueprints'
+import {
+  allBlueprintsForBuilding,
+  isGearRecipeUnlocked,
+  starStatMultiplier,
+} from './gearRecipeProgress'
 import type {
   GearBlueprintDef,
   GearBuildingDef,
@@ -203,27 +209,25 @@ export function rollGearQuality(
   base: GearQuality,
   source: GearQualitySource,
   playerLevel = 1,
-  blueprintUnlock = 15,
+  craftStar = 0,
 ): GearQuality {
   const tier = GEAR_QUALITY_ORDER.indexOf(base)
-  const levelBonus = Math.min(
-    0.1,
-    Math.max(0, (playerLevel - blueprintUnlock) * 0.005),
-  )
+  const levelBonus = Math.min(0.1, Math.max(0, playerLevel * 0.002))
+  const starBonus = craftStar * 0.025
   const r = Math.random()
 
   if (source === 'craft') {
     if (tier === 0) {
-      if (r < 0.08 + levelBonus) return 'masterwork'
-      if (r < 0.38 + levelBonus) return 'valley'
+      if (r < 0.08 + levelBonus + starBonus) return 'masterwork'
+      if (r < 0.38 + levelBonus + starBonus) return 'valley'
       return 'rustic'
     }
     if (tier === 1) {
-      if (r < 0.45 + levelBonus) return 'masterwork'
+      if (r < 0.45 + levelBonus + starBonus) return 'masterwork'
       if (r < 0.52) return 'rustic'
       return 'valley'
     }
-    if (r < 0.2 + levelBonus * 0.5) return 'valley'
+    if (r < 0.2 + levelBonus * 0.5 + starBonus) return 'valley'
     return 'masterwork'
   }
 
@@ -262,10 +266,11 @@ export function createGearInstance(
   source: GearQualitySource,
   playerLevel: number,
   createId: () => string,
+  craftStar = 0,
 ): GearInstance {
   const bp = GEAR_BLUEPRINT_BY_ID[blueprintId]
   const quality = bp
-    ? rollGearQuality(bp.quality, source, playerLevel, bp.unlockLevel)
+    ? rollGearQuality(bp.quality, source, playerLevel, craftStar)
     : 'rustic'
   return {
     id: createId(),
@@ -276,507 +281,7 @@ export function createGearInstance(
   }
 }
 
-export const GEAR_BLUEPRINTS: GearBlueprintDef[] = [
-  // Smithy — Wallace
-  {
-    id: 'bp_wood_pitchfork',
-    buildingId: 'smithy',
-    name: 'Wood Pitchfork',
-    emoji: '🍴',
-    slot: 'weapon',
-    quality: 'rustic',
-    stats: { attack: 4, defense: 0, hp: 0, skillBonus: 1 },
-    inputs: { wheat: 4, rope: 1 },
-    craftMs: 12_000,
-    xp: 12,
-    unlockLevel: 15,
-  },
-  {
-    id: 'bp_copper_sickle',
-    buildingId: 'smithy',
-    name: 'Copper Sickle',
-    emoji: '🌾',
-    slot: 'weapon',
-    quality: 'valley',
-    stats: { attack: 10, defense: 0, hp: 0, skillBonus: 2 },
-    inputs: { flour: 2, iron_ore: 2, rope: 1 },
-    craftMs: 20_000,
-    xp: 22,
-    unlockLevel: 16,
-  },
-  {
-    id: 'bp_valley_blade',
-    buildingId: 'smithy',
-    name: 'Valley Blade',
-    emoji: '⚔️',
-    slot: 'weapon',
-    quality: 'masterwork',
-    stats: { attack: 22, defense: 0, hp: 0, skillBonus: 4 },
-    inputs: { iron_ore: 4, cloth: 2, magic_essence: 1 },
-    craftMs: 35_000,
-    xp: 40,
-    unlockLevel: 18,
-  },
-  {
-    id: 'bp_iron_cap',
-    buildingId: 'smithy',
-    name: 'Iron Cap',
-    emoji: '🪖',
-    slot: 'helmet',
-    quality: 'valley',
-    stats: { attack: 0, defense: 7, hp: 6, skillBonus: 1 },
-    inputs: { iron_ore: 3, cow_hide: 1 },
-    craftMs: 18_000,
-    xp: 20,
-    unlockLevel: 17,
-  },
-  // Tailor Workshop — Julia
-  {
-    id: 'bp_straw_hat',
-    buildingId: 'tailor_workshop',
-    name: 'Straw Sun Hat',
-    emoji: '👒',
-    slot: 'helmet',
-    quality: 'rustic',
-    stats: { attack: 0, defense: 3, hp: 5, skillBonus: 1 },
-    inputs: { wheat: 3, sunflower: 1 },
-    craftMs: 10_000,
-    xp: 10,
-    unlockLevel: 16,
-  },
-  {
-    id: 'bp_wool_cloak',
-    buildingId: 'tailor_workshop',
-    name: 'Wool Cloak',
-    emoji: '🧥',
-    slot: 'armor',
-    quality: 'valley',
-    stats: { attack: 0, defense: 9, hp: 12, skillBonus: 2 },
-    inputs: { wool: 3, cloth: 2, rabbit_pelt: 1 },
-    craftMs: 22_000,
-    xp: 24,
-    unlockLevel: 17,
-  },
-  {
-    id: 'bp_quilted_vest',
-    buildingId: 'tailor_workshop',
-    name: 'Quilted Vest',
-    emoji: '🦺',
-    slot: 'armor',
-    quality: 'masterwork',
-    stats: { attack: 0, defense: 18, hp: 28, skillBonus: 3 },
-    inputs: { cloth: 3, wool: 4, sheep_leather: 2, magic_essence: 1 },
-    craftMs: 38_000,
-    xp: 42,
-    unlockLevel: 19,
-  },
-  // Wood Workshop — Allan
-  {
-    id: 'bp_wooden_bucket',
-    buildingId: 'wood_workshop',
-    name: 'Wooden Bucket',
-    emoji: '🪣',
-    slot: 'offhand',
-    quality: 'rustic',
-    stats: { attack: 0, defense: 2, hp: 4, skillBonus: 1 },
-    inputs: { timber: 2, rope: 1 },
-    craftMs: 10_000,
-    xp: 10,
-    unlockLevel: 17,
-  },
-  {
-    id: 'bp_iron_buckler',
-    buildingId: 'wood_workshop',
-    name: 'Iron Buckler',
-    emoji: '🛡️',
-    slot: 'offhand',
-    quality: 'valley',
-    stats: { attack: 0, defense: 8, hp: 10, skillBonus: 2 },
-    inputs: { iron_ore: 3, boar_leather: 1 },
-    craftMs: 22_000,
-    xp: 22,
-    unlockLevel: 18,
-  },
-  {
-    id: 'bp_valley_bow',
-    buildingId: 'wood_workshop',
-    name: 'Valley Bow',
-    emoji: '🏹',
-    slot: 'weapon',
-    quality: 'valley',
-    stats: { attack: 12, defense: 0, hp: 0, skillBonus: 2 },
-    inputs: { timber: 3, rope: 2, rabbit_pelt: 1 },
-    craftMs: 24_000,
-    xp: 26,
-    unlockLevel: 19,
-  },
-  // Apothecary — Maribel
-  {
-    id: 'bp_lucky_button',
-    buildingId: 'apothecary',
-    name: 'Lucky Button',
-    emoji: '🔘',
-    slot: 'accessory',
-    quality: 'rustic',
-    stats: { attack: 0, defense: 0, hp: 0, skillBonus: 2 },
-    inputs: { berry: 2, egg: 1 },
-    craftMs: 8_000,
-    xp: 10,
-    unlockLevel: 18,
-  },
-  {
-    id: 'bp_honey_charm',
-    buildingId: 'apothecary',
-    name: 'Honey Charm',
-    emoji: '🍯',
-    slot: 'accessory',
-    quality: 'valley',
-    stats: { attack: 2, defense: 2, hp: 8, skillBonus: 3 },
-    inputs: { honey: 2, sugar: 1, sunstone: 1 },
-    craftMs: 18_000,
-    xp: 20,
-    unlockLevel: 19,
-  },
-  {
-    id: 'bp_mint_tonic',
-    buildingId: 'apothecary',
-    name: 'Mint Tonic Vial',
-    emoji: '🧪',
-    slot: 'accessory',
-    quality: 'rustic',
-    stats: { attack: 0, defense: 0, hp: 10, skillBonus: 2 },
-    inputs: { mint: 3, honey: 1 },
-    craftMs: 12_000,
-    xp: 14,
-    unlockLevel: 18,
-  },
-  // Jewel Workshop — Katarina
-  {
-    id: 'bp_iron_ring',
-    buildingId: 'jewel_workshop',
-    name: 'Iron Ring',
-    emoji: '💍',
-    slot: 'accessory',
-    quality: 'rustic',
-    stats: { attack: 1, defense: 1, hp: 0, skillBonus: 2 },
-    inputs: { iron_ore: 2 },
-    craftMs: 10_000,
-    xp: 12,
-    unlockLevel: 19,
-  },
-  {
-    id: 'bp_sun_amulet',
-    buildingId: 'jewel_workshop',
-    name: 'Sun Amulet',
-    emoji: '☀️',
-    slot: 'accessory',
-    quality: 'masterwork',
-    stats: { attack: 5, defense: 5, hp: 15, skillBonus: 5 },
-    inputs: { sunflower: 2, magic_essence: 2, sunstone: 2 },
-    craftMs: 32_000,
-    xp: 38,
-    unlockLevel: 21,
-  },
-  {
-    id: 'bp_ruby_loop',
-    buildingId: 'jewel_workshop',
-    name: 'Ruby Loop',
-    emoji: '🔴',
-    slot: 'accessory',
-    quality: 'valley',
-    stats: { attack: 3, defense: 2, hp: 6, skillBonus: 3 },
-    inputs: { berry: 4, sugar: 2, sunstone: 1 },
-    craftMs: 20_000,
-    xp: 22,
-    unlockLevel: 20,
-  },
-  // Wizard Tower — Grimar
-  {
-    id: 'bp_spark_wand',
-    buildingId: 'wizard_tower',
-    name: 'Spark Wand',
-    emoji: '🪄',
-    slot: 'offhand',
-    quality: 'rustic',
-    stats: { attack: 2, defense: 0, hp: 0, skillBonus: 3 },
-    inputs: { wheat: 2, magic_essence: 1 },
-    craftMs: 14_000,
-    xp: 16,
-    unlockLevel: 20,
-  },
-  {
-    id: 'bp_runestone',
-    buildingId: 'wizard_tower',
-    name: 'Chipped Runestone',
-    emoji: '🪨',
-    slot: 'offhand',
-    quality: 'valley',
-    stats: { attack: 0, defense: 4, hp: 0, skillBonus: 4 },
-    inputs: { sunstone: 2, magic_essence: 2 },
-    craftMs: 24_000,
-    xp: 28,
-    unlockLevel: 21,
-  },
-  {
-    id: 'bp_arcane_staff',
-    buildingId: 'wizard_tower',
-    name: 'Arcane Staff',
-    emoji: '📜',
-    slot: 'weapon',
-    quality: 'masterwork',
-    stats: { attack: 14, defense: 0, hp: 0, skillBonus: 6 },
-    inputs: { magic_essence: 3, cloth: 2, sunstone: 1 },
-    craftMs: 36_000,
-    xp: 40,
-    unlockLevel: 23,
-  },
-  // Temple — Freyja
-  {
-    id: 'bp_wool_hood',
-    buildingId: 'temple',
-    name: 'Blessed Wool Hood',
-    emoji: '🧣',
-    slot: 'helmet',
-    quality: 'valley',
-    stats: { attack: 0, defense: 6, hp: 8, skillBonus: 2 },
-    inputs: { wool: 2, cloth: 1 },
-    craftMs: 16_000,
-    xp: 18,
-    unlockLevel: 21,
-  },
-  {
-    id: 'bp_holy_vestments',
-    buildingId: 'temple',
-    name: 'Holy Vestments',
-    emoji: '✨',
-    slot: 'armor',
-    quality: 'valley',
-    stats: { attack: 0, defense: 12, hp: 16, skillBonus: 3 },
-    inputs: { cloth: 3, wool: 2, magic_essence: 1 },
-    craftMs: 26_000,
-    xp: 30,
-    unlockLevel: 22,
-  },
-  {
-    id: 'bp_master_hood',
-    buildingId: 'temple',
-    name: 'Masterwork Hood',
-    emoji: '🪖',
-    slot: 'helmet',
-    quality: 'masterwork',
-    stats: { attack: 0, defense: 12, hp: 18, skillBonus: 3 },
-    inputs: { wool: 3, cloth: 2, magic_essence: 1 },
-    craftMs: 34_000,
-    xp: 36,
-    unlockLevel: 23,
-  },
-  // Master Lodge — Theodore
-  {
-    id: 'bp_valley_aegis',
-    buildingId: 'master_lodge',
-    name: 'Valley Aegis',
-    emoji: '🛡️',
-    slot: 'offhand',
-    quality: 'masterwork',
-    stats: { attack: 0, defense: 16, hp: 24, skillBonus: 4 },
-    inputs: { iron_ore: 4, cloth: 2, sunstone: 1 },
-    craftMs: 36_000,
-    xp: 38,
-    unlockLevel: 22,
-  },
-  {
-    id: 'bp_master_blade',
-    buildingId: 'master_lodge',
-    name: 'Masterwork Blade',
-    emoji: '🗡️',
-    slot: 'weapon',
-    quality: 'masterwork',
-    stats: { attack: 26, defense: 0, hp: 0, skillBonus: 5 },
-    inputs: { iron_ore: 5, magic_essence: 2, sunstone: 2 },
-    craftMs: 40_000,
-    xp: 45,
-    unlockLevel: 24,
-  },
-  {
-    id: 'bp_master_signet',
-    buildingId: 'master_lodge',
-    name: 'Master Signet',
-    emoji: '👑',
-    slot: 'accessory',
-    quality: 'masterwork',
-    stats: { attack: 4, defense: 4, hp: 12, skillBonus: 6 },
-    inputs: { iron_ore: 2, magic_essence: 2, sunstone: 2 },
-    craftMs: 38_000,
-    xp: 42,
-    unlockLevel: 24,
-  },
-  // Engineer's Bench — Roxanne
-  {
-    id: 'bp_light_crossbow',
-    buildingId: 'engineer_bench',
-    name: 'Light Crossbow',
-    emoji: '🎯',
-    slot: 'weapon',
-    quality: 'valley',
-    stats: { attack: 16, defense: 0, hp: 0, skillBonus: 3 },
-    inputs: { iron_ore: 3, rope: 3, pig_leather: 2 },
-    craftMs: 28_000,
-    xp: 32,
-    unlockLevel: 25,
-  },
-  {
-    id: 'bp_pellet_gun',
-    buildingId: 'engineer_bench',
-    name: 'Pellet Gun',
-    emoji: '🔫',
-    slot: 'weapon',
-    quality: 'masterwork',
-    stats: { attack: 24, defense: 0, hp: 0, skillBonus: 4 },
-    inputs: { iron_ore: 5, magic_essence: 1, sunstone: 2 },
-    craftMs: 38_000,
-    xp: 44,
-    unlockLevel: 27,
-  },
-  // Scholar's Study — Evelyn
-  {
-    id: 'bp_scholar_wand',
-    buildingId: 'scholars_study',
-    name: "Scholar's Wand",
-    emoji: '📖',
-    slot: 'offhand',
-    quality: 'valley',
-    stats: { attack: 0, defense: 2, hp: 0, skillBonus: 5 },
-    inputs: { magic_essence: 3, cloth: 2 },
-    craftMs: 26_000,
-    xp: 30,
-    unlockLevel: 28,
-  },
-  {
-    id: 'bp_ancient_runestone',
-    buildingId: 'scholars_study',
-    name: 'Ancient Runestone',
-    emoji: '🔮',
-    slot: 'offhand',
-    quality: 'masterwork',
-    stats: { attack: 0, defense: 6, hp: 0, skillBonus: 7 },
-    inputs: { magic_essence: 4, sunstone: 3 },
-    craftMs: 40_000,
-    xp: 46,
-    unlockLevel: 30,
-  },
-  // Summoner Sanctum — Yolanda
-  {
-    id: 'bp_spirit_cloak',
-    buildingId: 'summoner_sanctum',
-    name: 'Spirit Cloak',
-    emoji: '👻',
-    slot: 'armor',
-    quality: 'valley',
-    stats: { attack: 0, defense: 14, hp: 20, skillBonus: 4 },
-    inputs: { cloth: 4, magic_essence: 2, wool: 2 },
-    craftMs: 30_000,
-    xp: 34,
-    unlockLevel: 30,
-  },
-  {
-    id: 'bp_familiar_charm',
-    buildingId: 'summoner_sanctum',
-    name: 'Familiar Charm',
-    emoji: '🐾',
-    slot: 'accessory',
-    quality: 'masterwork',
-    stats: { attack: 3, defense: 3, hp: 10, skillBonus: 6 },
-    inputs: { egg: 2, honey: 2, magic_essence: 2 },
-    craftMs: 34_000,
-    xp: 40,
-    unlockLevel: 32,
-  },
-  // Bard's Stage — Yohan
-  {
-    id: 'bp_valley_lute',
-    buildingId: 'bards_stage',
-    name: 'Valley Lute',
-    emoji: '🎸',
-    slot: 'accessory',
-    quality: 'valley',
-    stats: { attack: 0, defense: 0, hp: 0, skillBonus: 5 },
-    inputs: { wheat: 3, rope: 2, cloth: 1 },
-    craftMs: 22_000,
-    xp: 26,
-    unlockLevel: 32,
-  },
-  {
-    id: 'bp_aurasong_harp',
-    buildingId: 'bards_stage',
-    name: 'Aurasong Harp',
-    emoji: '🎻',
-    slot: 'accessory',
-    quality: 'masterwork',
-    stats: { attack: 2, defense: 2, hp: 8, skillBonus: 7 },
-    inputs: { magic_essence: 2, sunstone: 2, cloth: 3 },
-    craftMs: 36_000,
-    xp: 42,
-    unlockLevel: 34,
-  },
-  // Veteran's Quarter — Roland
-  {
-    id: 'bp_twin_blades',
-    buildingId: 'veterans_quarter',
-    name: 'Twin Valley Blades',
-    emoji: '⚔️',
-    slot: 'weapon',
-    quality: 'masterwork',
-    stats: { attack: 28, defense: 0, hp: 0, skillBonus: 4 },
-    inputs: { iron_ore: 6, boar_leather: 2, magic_essence: 1 },
-    craftMs: 42_000,
-    xp: 48,
-    unlockLevel: 35,
-  },
-  {
-    id: 'bp_quiver',
-    buildingId: 'veterans_quarter',
-    name: 'Hunter Quiver',
-    emoji: '🏹',
-    slot: 'offhand',
-    quality: 'valley',
-    stats: { attack: 4, defense: 0, hp: 0, skillBonus: 4 },
-    inputs: { pig_leather: 3, rope: 2, wool: 1 },
-    craftMs: 24_000,
-    xp: 28,
-    unlockLevel: 35,
-  },
-  // Storm Shrine — Zephyr
-  {
-    id: 'bp_storm_catalyst',
-    buildingId: 'storm_shrine',
-    name: 'Storm Catalyst',
-    emoji: '🌩️',
-    slot: 'accessory',
-    quality: 'valley',
-    stats: { attack: 6, defense: 0, hp: 0, skillBonus: 5 },
-    inputs: { magic_essence: 3, sunstone: 2 },
-    craftMs: 28_000,
-    xp: 32,
-    unlockLevel: 38,
-  },
-  {
-    id: 'bp_storm_idol',
-    buildingId: 'storm_shrine',
-    name: 'Storm Idol',
-    emoji: '⚡',
-    slot: 'accessory',
-    quality: 'masterwork',
-    stats: { attack: 8, defense: 4, hp: 12, skillBonus: 8 },
-    inputs: { magic_essence: 4, sunstone: 4, iron_ore: 2 },
-    craftMs: 44_000,
-    xp: 50,
-    unlockLevel: 40,
-  },
-]
-
-export const GEAR_BLUEPRINT_BY_ID = Object.fromEntries(
-  GEAR_BLUEPRINTS.map((b) => [b.id, b]),
-)
+export { GEAR_BLUEPRINTS, GEAR_BLUEPRINT_BY_ID }
 
 export const MATERIAL_META: Record<
   MaterialId,
@@ -804,19 +309,20 @@ export const GEAR_SLOT_LABEL: Record<GearSlot, string> = {
 
 export function blueprintsForBuilding(
   buildingId: GearBuildingId,
-  playerLevel: number,
+  craftCounts: Record<string, number>,
 ): GearBlueprintDef[] {
-  return GEAR_BLUEPRINTS.filter(
-    (b) => b.buildingId === buildingId && b.unlockLevel <= playerLevel,
+  return allBlueprintsForBuilding(buildingId).filter((b) =>
+    isGearRecipeUnlocked(b, craftCounts),
   )
 }
 
 export function scaledStats(
   blueprint: GearBlueprintDef,
   quality?: GearQuality,
+  star = 0,
 ) {
   const q = quality ?? blueprint.quality
-  const m = QUALITY_MULT[q]
+  const m = QUALITY_MULT[q] * starStatMultiplier(star)
   return {
     attack: Math.round(blueprint.stats.attack * m),
     defense: Math.round(blueprint.stats.defense * m),
@@ -824,6 +330,15 @@ export function scaledStats(
     skillBonus: Math.round(blueprint.stats.skillBonus * m),
   }
 }
+
+export {
+  allBlueprintsForBuilding,
+  formatRecipeStars,
+  isGearRecipeUnlocked,
+  recipeStar,
+  recipeUnlockProgress,
+  starCraftMsMultiplier,
+} from './gearRecipeProgress'
 
 export function gearInstanceStats(instance: GearInstance) {
   const bp = GEAR_BLUEPRINT_BY_ID[instance.blueprintId]

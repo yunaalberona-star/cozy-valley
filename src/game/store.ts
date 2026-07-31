@@ -39,9 +39,12 @@ import {
   GEAR_BLUEPRINT_BY_ID,
   GEAR_BUILDINGS,
   createGearInstance,
+  isGearRecipeUnlocked,
   isQualityUpgrade,
   MATERIAL_META,
   QUALITY_LABEL,
+  recipeStar,
+  starCraftMsMultiplier,
 } from './data/gear'
 import {
   EVENT_BY_ID,
@@ -89,6 +92,11 @@ import { buildingUnlockLevel, unlocksCrossingLevels, unlocksForLevel } from './d
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
 import { grantRecruitXp, partyPower } from './data/recruits'
 import { ORDERS } from './data/orders'
+import {
+  rollShipOrders,
+  shipPeriodKey,
+  SHIP_SLOTS,
+} from './data/shipOrders'
 import { itemSellPrice, materialSellPrice, seedSellPrice } from './data/sellPrices'
 import { MARKET_UNLOCK_LEVEL, isValidMarketPrice } from './data/market'
 import type { MarketItemKind } from './data/market'
@@ -116,6 +124,7 @@ import { migrateUnlockId, migrateGearBuildingId, unlockMeta } from './unlocks'
 import type {
   ActiveAdventure,
   ActiveOrder,
+  ActiveShipOrder,
   AdventurePaneId,
   GatherSiteId,
   MaterialsPaneId,
@@ -492,6 +501,31 @@ function levelUnlockSubtitle(levelIds: UnlockId[], newLevel: number): string {
     return `Reached Level ${TAVERN_UNLOCK_LEVEL}!`
   }
   return `Reached Level ${newLevel}!`
+}
+
+function ensureShipOrders(
+  playerLevel: number,
+  slice: Pick<
+    GameState,
+    'shipPeriodKey' | 'activeShipOrders' | 'shipBoardComplete' | 'unlocked'
+  >,
+): Partial<
+  Pick<GameState, 'shipPeriodKey' | 'activeShipOrders' | 'shipBoardComplete'>
+> {
+  if (!slice.unlocked.includes('orders_board')) return {}
+  const key = shipPeriodKey()
+  if (
+    slice.shipPeriodKey !== key ||
+    slice.activeShipOrders.length === 0 ||
+    slice.activeShipOrders.length !== SHIP_SLOTS
+  ) {
+    return {
+      shipPeriodKey: key,
+      activeShipOrders: rollShipOrders(playerLevel, key),
+      shipBoardComplete: false,
+    }
+  }
+  return {}
 }
 
 function activeMissionDef(activeMissionId: string | null): MissionDef | null {
@@ -1144,6 +1178,41 @@ function migrateSaveState(
     state.achievementProgress = {}
     state.claimedAchievements = []
   }
+  if (version < 22) {
+    const xp = typeof state.xp === 'number' ? state.xp : 0
+    const level = levelFromXp(xp)
+    const key = shipPeriodKey()
+    state.shipPeriodKey = key
+    state.activeShipOrders = (state.unlocked as UnlockId[])?.includes(
+      'orders_board',
+    )
+      ? rollShipOrders(level, key)
+      : []
+  }
+  if (version < 23) {
+    const orders = state.activeShipOrders as
+      | Array<Record<string, unknown>>
+      | undefined
+    if (Array.isArray(orders)) {
+      state.activeShipOrders = orders.map((o) => ({
+        slot: o.slot as number,
+        itemId: o.itemId,
+        qty: o.qty as number,
+        rewardCoins: o.rewardCoins as number,
+        rewardXp: o.rewardXp as number,
+        filled: Boolean(o.filled ?? o.fulfilled),
+      }))
+    }
+    if (typeof state.shipBoardComplete !== 'boolean') {
+      const allDone = (state.activeShipOrders as ActiveShipOrder[] | undefined)?.every(
+        (o) => o.filled,
+      )
+      state.shipBoardComplete = Boolean(allDone)
+    }
+  }
+  if (version < 24) {
+    state.gearRecipeCraftCount = {}
+  }
   return state
 }
 
@@ -1222,6 +1291,9 @@ export interface GameState {
   tab: TabId
   craftQueue: CraftJob[]
   activeOrders: ActiveOrder[]
+  shipPeriodKey: string
+  activeShipOrders: ActiveShipOrder[]
+  shipBoardComplete: boolean
   animals: AnimalInstance[]
   unlocked: UnlockId[]
   ownedBuildings: BuildingId[]
@@ -1262,6 +1334,7 @@ export interface GameState {
   activeAdventures: ActiveAdventure[]
   gearInventory: GearInstance[]
   gearCraftQueue: GearCraftJob[]
+  gearRecipeCraftCount: Record<string, number>
   popupQueue: PopupState[]
   toast: string | null
   guideTabPulses: TabId[]
@@ -1331,6 +1404,9 @@ export interface GameState {
   collectAnimal: (animalId: string) => void
 
   fulfillOrder: (slot: number) => void
+  fillShipOrder: (slot: number) => void
+  shipCrate: () => void
+  refreshShipOrders: () => void
 
   createMarketListing: (
     itemKind: MarketItemKind,
@@ -1394,6 +1470,9 @@ const initial = () => {
     tab: 'missions' as TabId,
     craftQueue: [] as CraftJob[],
     activeOrders: [] as ActiveOrder[],
+    shipPeriodKey: shipPeriodKey(),
+    activeShipOrders: [] as ActiveShipOrder[],
+    shipBoardComplete: false,
     animals: [] as AnimalInstance[],
     unlocked: syncLevelUnlocks(0, []) as UnlockId[],
     ownedBuildings: [] as BuildingId[],
@@ -1434,6 +1513,7 @@ const initial = () => {
     activeAdventures: [] as ActiveAdventure[],
     gearInventory: [] as GearInstance[],
     gearCraftQueue: [] as GearCraftJob[],
+    gearRecipeCraftCount: {} as Record<string, number>,
     popupQueue: [] as PopupState[],
     toast: 'Welcome! Level up to unlock machines and new seeds.' as string | null,
     guideTabPulses: [] as TabId[],
@@ -1558,7 +1638,7 @@ export const useGame = create<GameState>()(
       setTab: (tab) =>
         set((s) => {
           const switching = s.tab !== tab
-          return {
+          const patch: Partial<GameState> = {
             tab,
             selectedBuilding:
               switching && tab === 'machines' ? null : s.selectedBuilding,
@@ -1568,6 +1648,13 @@ export const useGame = create<GameState>()(
             contextGuideTab:
               s.contextGuideTab === tab ? null : s.contextGuideTab,
           }
+          if (tab === 'orders') {
+            Object.assign(
+              patch,
+              ensureShipOrders(levelFromXp(s.xp), s),
+            )
+          }
+          return patch
         }),
       setShopPane: (pane) => set({ shopPane: pane }),
       setFarmPane: (pane) => set({ farmPane: pane }),
@@ -2728,6 +2815,86 @@ export const useGame = create<GameState>()(
         get().track('own_coins', undefined, get().coins)
       },
 
+      fillShipOrder: (slot) => {
+        const s = get()
+        if (!s.unlocked.includes('orders_board')) {
+          set({ toast: `Orders unlock at Level ${ORDERS_UNLOCK_LEVEL}` })
+          return
+        }
+        if (s.shipBoardComplete) return
+        const active = s.activeShipOrders.find((o) => o.slot === slot)
+        if (!active || active.filled) return
+        const needs = { [active.itemId]: active.qty }
+        if (!hasItems(s.inventory, needs)) {
+          set({ toast: 'Missing items for this slot' })
+          return
+        }
+        const meta = ITEM_META[active.itemId]
+        set({
+          inventory: takeItems(s.inventory, needs),
+          activeShipOrders: s.activeShipOrders.map((o) =>
+            o.slot === slot ? { ...o, filled: true } : o,
+          ),
+          toast: `Filled ${active.qty}× ${meta?.name ?? active.itemId}`,
+        })
+      },
+
+      shipCrate: () => {
+        const s = get()
+        if (!s.unlocked.includes('orders_board')) {
+          set({ toast: `Orders unlock at Level ${ORDERS_UNLOCK_LEVEL}` })
+          return
+        }
+        if (s.shipBoardComplete) return
+        if (
+          s.activeShipOrders.length === 0 ||
+          !s.activeShipOrders.every((o) => o.filled)
+        ) {
+          set({ toast: 'Fill every slot before shipping' })
+          return
+        }
+        const totalCoins = s.activeShipOrders.reduce(
+          (sum, o) => sum + o.rewardCoins,
+          0,
+        )
+        const totalXp = s.activeShipOrders.reduce(
+          (sum, o) => sum + o.rewardXp,
+          0,
+        )
+        const xpResult = applyXpGain(
+          s.xp,
+          totalXp,
+          s.popupQueue,
+          s.unlocked,
+          s.activeOrders,
+          s.seeds,
+        )
+        const guides = unlockGuidePatch(
+          s,
+          xpResult.unlocked,
+          levelFromXp(xpResult.xp),
+        )
+        set({
+          coins: s.coins + totalCoins,
+          xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
+          popupQueue: xpResult.popupQueue,
+          shipBoardComplete: true,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
+          toast: `+${totalCoins} coins · +${totalXp} XP · Shipment sent!`,
+        })
+        get().track('fulfill_order', undefined, 1)
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      refreshShipOrders: () => {
+        const s = get()
+        const patch = ensureShipOrders(levelFromXp(s.xp), s)
+        if (Object.keys(patch).length > 0) set(patch)
+      },
+
       createMarketListing: async (itemKind, itemId, qty, pricePerUnit) => {
         const amount = Math.max(1, Math.floor(qty))
         if (!get().isMarketOpen()) {
@@ -3440,6 +3607,7 @@ export const useGame = create<GameState>()(
           playerLevel,
           rollGearDropCount(),
           uid,
+          s.unlocked.filter((id) => id in GEAR_BUILDINGS),
         )
         const materialDrops = rollRareMaterialDrops(
           playerLevel,
@@ -3481,9 +3649,8 @@ export const useGame = create<GameState>()(
           set({ toast: `${GEAR_BUILDINGS[blueprint.buildingId].name} unlocks at Level ${need}` })
           return
         }
-        const level = levelFromXp(s.xp)
-        if (level < blueprint.unlockLevel) {
-          set({ toast: `Reach Level ${blueprint.unlockLevel} for this blueprint` })
+        if (!isGearRecipeUnlocked(blueprint, s.gearRecipeCraftCount)) {
+          set({ toast: 'Craft earlier recipes to unlock this blueprint' })
           return
         }
         const building = GEAR_BUILDINGS[blueprint.buildingId]
@@ -3500,6 +3667,10 @@ export const useGame = create<GameState>()(
         }
         const taken = takeResources(s.inventory, s.materials, blueprint.inputs)
         const now = Date.now()
+        const star = recipeStar(s.gearRecipeCraftCount[blueprintId] ?? 0)
+        const craftMs = Math.round(
+          blueprint.craftMs * starCraftMsMultiplier(star),
+        )
         set((s) =>
           withMissionProgress(s, {
             inventory: taken.inventory,
@@ -3510,7 +3681,7 @@ export const useGame = create<GameState>()(
                 blueprintId,
                 buildingId: blueprint.buildingId,
                 startedAt: now,
-                doneAt: now + blueprint.craftMs,
+                doneAt: now + craftMs,
               },
             ],
             toast: `${building.name}: ${blueprint.name}…`,
@@ -3525,14 +3696,19 @@ export const useGame = create<GameState>()(
         const blueprint = GEAR_BLUEPRINT_BY_ID[job.blueprintId]
         if (!blueprint) return
         const craftLevel = levelFromXp(s.xp)
+        const prevCount = s.gearRecipeCraftCount[job.blueprintId] ?? 0
+        const star = recipeStar(prevCount)
         const gear = createGearInstance(
           job.blueprintId,
           craftLevel,
           'craft',
           craftLevel,
           uid,
+          star,
         )
         const upgraded = isQualityUpgrade(blueprint.quality, gear.quality)
+        const nextCraftCount = prevCount + 1
+        const newStar = recipeStar(nextCraftCount)
         const xpResult = applyXpGain(
           s.xp,
           blueprint.xp,
@@ -3546,9 +3722,14 @@ export const useGame = create<GameState>()(
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        const starUp = newStar > recipeStar(prevCount)
         set({
           gearCraftQueue: s.gearCraftQueue.filter((_, i) => i !== index),
           gearInventory: [...s.gearInventory, gear],
+          gearRecipeCraftCount: {
+            ...s.gearRecipeCraftCount,
+            [job.blueprintId]: nextCraftCount,
+          },
           xp: xpResult.xp,
           seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
@@ -3556,9 +3737,11 @@ export const useGame = create<GameState>()(
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          toast: upgraded
-            ? `Crafted ${blueprint.name} — ${QUALITY_LABEL[gear.quality]}! ✨`
-            : `Crafted ${blueprint.name} (${QUALITY_LABEL[gear.quality]})`,
+          toast: starUp
+            ? `${blueprint.name} → ${newStar}★!`
+            : upgraded
+              ? `Crafted ${blueprint.name} — ${QUALITY_LABEL[gear.quality]}! ✨`
+              : `Crafted ${blueprint.name} (${QUALITY_LABEL[gear.quality]})`,
         })
         get().track('craft_gear', job.blueprintId, 1)
       },
@@ -3666,6 +3849,7 @@ export const useGame = create<GameState>()(
         state.unlocked = syncLevelUnlocks(state.xp, state.unlocked ?? [])
         const level = levelFromXp(state.xp)
         Object.assign(state, ensureScheduledGoals(level, state as GameState))
+        Object.assign(state, ensureShipOrders(level, state as GameState))
         state.achievementProgress = syncStateAchievements(
           (state.achievementProgress as Record<string, number>) ?? {},
           state as GameState,
@@ -3724,6 +3908,9 @@ export const useGame = create<GameState>()(
         farmPane: s.farmPane,
         craftQueue: s.craftQueue,
         activeOrders: s.activeOrders,
+        shipPeriodKey: s.shipPeriodKey,
+        activeShipOrders: s.activeShipOrders,
+        shipBoardComplete: s.shipBoardComplete,
         animals: s.animals,
         unlocked: s.unlocked,
         ownedBuildings: s.ownedBuildings,
@@ -3764,6 +3951,7 @@ export const useGame = create<GameState>()(
         activeAdventures: s.activeAdventures,
         gearInventory: s.gearInventory,
         gearCraftQueue: s.gearCraftQueue,
+        gearRecipeCraftCount: s.gearRecipeCraftCount,
         guideTabPulses: s.guideTabPulses,
         guideItemHighlights: s.guideItemHighlights,
         darkMode: s.darkMode,

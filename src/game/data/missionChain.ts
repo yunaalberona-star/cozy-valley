@@ -196,7 +196,7 @@ const MATERIAL_ROTATION: MaterialId[] = [
 const ADVENTURE_ROTATION = ADVENTURES.map((a) => a.id)
 
 const GEAR_BLUEPRINT_ROTATION = GEAR_BLUEPRINTS.filter(
-  (b) => b.unlockLevel <= 20,
+  (b) => b.unlock.starter,
 ).map((b) => b.id)
 
 const TREE_PRODUCT_ROTATION: ItemId[] = [

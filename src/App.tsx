@@ -23,7 +23,8 @@ import {
   TAVERN_UNLOCK_LEVEL,
 } from './game/data/adventures'
 import {
-  blueprintsForBuilding,
+  allBlueprintsForBuilding,
+  formatRecipeStars,
   GEAR_BLUEPRINT_BY_ID,
   GEAR_BUILDINGS,
   GEAR_BUILDINGS_PREMIUM,
@@ -32,8 +33,11 @@ import {
   gearForNpc,
   gearInstanceQuality,
   gearInstanceStats,
+  isGearRecipeUnlocked,
   MATERIAL_META,
   QUALITY_LABEL,
+  recipeStar,
+  recipeUnlockProgress,
   resourceMeta,
   scaledStats,
 } from './game/data/gear'
@@ -96,6 +100,11 @@ import {
   recruitXpProgress,
 } from './game/data/recruits'
 import { ORDERS } from './game/data/orders'
+import {
+  formatShipCountdown,
+  msUntilShipRefresh,
+  shipItemLabel,
+} from './game/data/shipOrders'
 import {
   MARKET_UNLOCK_LEVEL,
   marketItemLabel,
@@ -175,6 +184,26 @@ function formatLeft(ms: number) {
   const m = Math.floor(s / 60)
   const r = s % 60
   return `${m}m ${r}s`
+}
+
+function GearIcon({
+  blueprint,
+  className,
+}: {
+  blueprint: { emoji: string; icon?: string; name: string }
+  className?: string
+}) {
+  if (blueprint.icon) {
+    return (
+      <img
+        src={blueprint.icon}
+        alt=""
+        aria-hidden
+        className={['gear-icon', className].filter(Boolean).join(' ')}
+      />
+    )
+  }
+  return <span className={className}>{blueprint.emoji}</span>
 }
 
 const TABS: { id: TabId; label: string; emoji: string }[] = [
@@ -2133,37 +2162,17 @@ function AnimalsView() {
   )
 }
 
-function OrdersView() {
+function StoreOrdersPane() {
   const inventory = useGame((s) => s.inventory)
   const activeOrders = useGame((s) => s.activeOrders)
   const fulfillOrder = useGame((s) => s.fulfillOrder)
   const navigateToResource = useGame((s) => s.navigateToResource)
-  const isOrdersOpen = useGame((s) => s.isOrdersOpen)
-  const xp = useGame((s) => s.xp)
-  const { level } = xpProgress(xp)
-
-  if (!isOrdersOpen()) {
-    return (
-      <div className="panel">
-        <div className="panel-head">
-          <h2>Orders</h2>
-          <p>
-            🔒 Reach <strong>Level {ORDERS_UNLOCK_LEVEL}</strong> to unlock the
-            Orders Board.
-          </p>
-          <p className="muted">You are Level {level}.</p>
-        </div>
-      </div>
-    )
-  }
 
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <h2>Orders</h2>
-        <p>Ship goods for coins & XP. Completed slots swap to a new order automatically.</p>
-      </div>
-
+    <>
+      <p className="muted orders-pane-desc">
+        Regular store orders — completed slots swap to a new order automatically.
+      </p>
       <div className="card-list">
         {activeOrders.map((active) => {
           const order = ORDERS.find((o) => o.id === active.orderId)
@@ -2204,6 +2213,173 @@ function OrdersView() {
           )
         })}
       </div>
+    </>
+  )
+}
+
+function ShipOrdersPane() {
+  const now = useNow(1000)
+  const inventory = useGame((s) => s.inventory)
+  const activeShipOrders = useGame((s) => s.activeShipOrders)
+  const shipBoardComplete = useGame((s) => s.shipBoardComplete)
+  const fillShipOrder = useGame((s) => s.fillShipOrder)
+  const shipCrate = useGame((s) => s.shipCrate)
+  const refreshShipOrders = useGame((s) => s.refreshShipOrders)
+  const navigateToResource = useGame((s) => s.navigateToResource)
+  const msLeft = msUntilShipRefresh(now)
+
+  useEffect(() => {
+    refreshShipOrders()
+  }, [refreshShipOrders])
+
+  useEffect(() => {
+    if (msLeft <= 1000) refreshShipOrders()
+  }, [msLeft, refreshShipOrders])
+
+  const filledCount = activeShipOrders.filter((o) => o.filled).length
+  const allFilled =
+    activeShipOrders.length > 0 &&
+    activeShipOrders.every((o) => o.filled)
+  const totalCoins = activeShipOrders.reduce((sum, o) => sum + o.rewardCoins, 0)
+  const totalXp = activeShipOrders.reduce((sum, o) => sum + o.rewardXp, 0)
+
+  return (
+    <>
+      <p className="muted orders-pane-desc">
+        Export crate — fill all 6 slots, then ship together. New shipment in{' '}
+        <strong>{formatShipCountdown(msLeft)}</strong>
+        {filledCount > 0 && !shipBoardComplete && (
+          <> · {filledCount}/{activeShipOrders.length} filled</>
+        )}
+        {shipBoardComplete && <> · Shipment sent</>}
+      </p>
+      <div className="card-list">
+        {activeShipOrders.map((order) => {
+          const meta = ITEM_META[order.itemId]
+          const canFill =
+            !shipBoardComplete &&
+            !order.filled &&
+            (inventory[order.itemId] ?? 0) >= order.qty
+          return (
+            <div
+              key={`ship-${order.slot}-${order.itemId}`}
+              className={`recipe-card${order.filled || shipBoardComplete ? ' is-complete' : ''}`}
+            >
+              <div className="recipe-top">
+                <span className="big-emoji">{meta?.emoji ?? '📦'}</span>
+                <div>
+                  <strong>{shipItemLabel(order.itemId, order.qty)}</strong>
+                  <p className="muted">
+                    🪙 {order.rewardCoins} · +{order.rewardXp} XP
+                  </p>
+                </div>
+              </div>
+              {!order.filled && !shipBoardComplete && (
+                <>
+                  <IngredientBar
+                    items={[{ id: order.itemId, qty: order.qty }]}
+                    inventory={inventory}
+                    onNeedResource={navigateToResource}
+                    label={false}
+                    compact
+                  />
+                  <button
+                    type="button"
+                    className="btn full"
+                    disabled={!canFill}
+                    onClick={() => fillShipOrder(order.slot)}
+                  >
+                    Fill
+                  </button>
+                </>
+              )}
+              {order.filled && !shipBoardComplete && (
+                <p className="muted ship-fulfilled">✓ Filled</p>
+              )}
+              {shipBoardComplete && (
+                <p className="muted ship-fulfilled">✓ Shipped</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {!shipBoardComplete && (
+        <div className="ship-crate-footer">
+          <p className="muted">
+            Crate reward: 🪙 {totalCoins} · +{totalXp} XP
+          </p>
+          <button
+            type="button"
+            className="btn full ship-crate-btn"
+            disabled={!allFilled}
+            onClick={() => shipCrate()}
+          >
+            Ship
+          </button>
+        </div>
+      )}
+    </>
+  )
+}
+
+function OrdersView() {
+  const [pane, setPane] = useState<'store' | 'ship'>('store')
+  const isOrdersOpen = useGame((s) => s.isOrdersOpen)
+  const xp = useGame((s) => s.xp)
+  const activeShipOrders = useGame((s) => s.activeShipOrders)
+  const shipBoardComplete = useGame((s) => s.shipBoardComplete)
+  const { level } = xpProgress(xp)
+  const shipReady =
+    !shipBoardComplete &&
+    activeShipOrders.length > 0 &&
+    (activeShipOrders.some((o) => !o.filled) ||
+      activeShipOrders.every((o) => o.filled))
+
+  if (!isOrdersOpen()) {
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <h2>Orders</h2>
+          <p>
+            🔒 Reach <strong>Level {ORDERS_UNLOCK_LEVEL}</strong> to unlock the
+            Orders Board.
+          </p>
+          <p className="muted">You are Level {level}.</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Orders</h2>
+        <p>Fulfill store orders or ship export crates for coins & XP.</p>
+      </div>
+
+      <div className="pane-tabs pane-tabs-2" role="tablist" aria-label="Order types">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'store'}
+          className={pane === 'store' ? 'active' : ''}
+          onClick={() => setPane('store')}
+        >
+          🏪 Store
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'ship'}
+          className={`${pane === 'ship' ? 'active' : ''}${shipReady ? ' has-active' : ''}`}
+          onClick={() => setPane('ship')}
+        >
+          🚢 Ship
+        </button>
+      </div>
+
+      {pane === 'store' && <StoreOrdersPane />}
+      {pane === 'ship' && <ShipOrdersPane />}
     </div>
   )
 }
@@ -3232,7 +3408,7 @@ function BagView() {
           const stats = gearInstanceStats(g)
           return (
             <div key={g.id} className="inv-cell">
-              <span>{bp.emoji}</span>
+              <GearIcon blueprint={bp} />
               <strong>+{stats.skillBonus}</strong>
               <small>
                 {bp.name} · {QUALITY_LABEL[gearInstanceQuality(g)]} · Lv{' '}
@@ -3329,7 +3505,7 @@ function RecruitCard({
                   <span
                     className={`gear-slot-btn ${equipped ? 'filled' : 'empty'}${equipped ? ` quality-${gearInstanceQuality(equipped)}` : ''}`}
                   >
-                    {bp ? bp.emoji : '+'}
+                    {bp ? <GearIcon blueprint={bp} /> : '+'}
                   </span>
                 </button>
               )
@@ -3376,7 +3552,7 @@ function RecruitCard({
                       }}
                       title={`${opt.name} · skill +${st.skillBonus}`}
                     >
-                      <span className="gear-pick-emoji">{opt.emoji}</span>
+                      <GearIcon blueprint={opt} className="gear-pick-emoji" />
                       <span className="gear-pick-meta">
                         <strong>{opt.name}</strong>
                         <small>
@@ -3890,6 +4066,7 @@ function AdventureView() {
   const activeAdventures = useGame((s) => s.activeAdventures)
   const gearInventory = useGame((s) => s.gearInventory)
   const gearCraftQueue = useGame((s) => s.gearCraftQueue)
+  const gearRecipeCraftCount = useGame((s) => s.gearRecipeCraftCount)
   const inventory = useGame((s) => s.inventory)
   const materials = useGame((s) => s.materials)
   const unlocked = useGame((s) => s.unlocked)
@@ -3911,7 +4088,7 @@ function AdventureView() {
       ? selectedGearBuilding
       : null
   const gearBuilding = gearOpen ? GEAR_BUILDINGS[gearOpen] : null
-  const gearRecipes = gearOpen ? blueprintsForBuilding(gearOpen, level) : []
+  const gearRecipes = gearOpen ? allBlueprintsForBuilding(gearOpen) : []
   const gearQueue = gearCraftQueue
     .map((job, index) => ({ job, index }))
     .filter(({ job }) => job.buildingId === gearOpen)
@@ -4171,7 +4348,7 @@ function AdventureView() {
                     )
                     return (
                       <div key={`${job.blueprintId}-${job.startedAt}`} className="queue-row">
-                        <span>{bp.emoji}</span>
+                        <GearIcon blueprint={bp} />
                         <div className="queue-body">
                           <strong>{bp.name}</strong>
                           <div className="mini-track">
@@ -4199,54 +4376,88 @@ function AdventureView() {
 
               <div className="card-list">
                 {gearRecipes.map((bp) => {
-                  const stats = scaledStats(bp)
-                  const missing = Object.entries(bp.inputs).some(([id, qty]) => {
-                    if (id in MATERIAL_META) {
-                      return (
-                        (materials[id as keyof typeof MATERIAL_META] ?? 0) <
-                        (qty ?? 0)
-                      )
-                    }
-                    return (inventory[id as ItemId] ?? 0) < (qty ?? 0)
-                  })
+                  const unlocked = isGearRecipeUnlocked(
+                    bp,
+                    gearRecipeCraftCount,
+                  )
+                  const star = recipeStar(gearRecipeCraftCount[bp.id] ?? 0)
+                  const unlockHint = recipeUnlockProgress(
+                    bp,
+                    gearRecipeCraftCount,
+                  )
+                  const stats = scaledStats(bp, undefined, star)
+                  const missing = unlocked
+                    ? Object.entries(bp.inputs).some(([id, qty]) => {
+                        if (id in MATERIAL_META) {
+                          return (
+                            (materials[id as keyof typeof MATERIAL_META] ?? 0) <
+                            (qty ?? 0)
+                          )
+                        }
+                        return (inventory[id as ItemId] ?? 0) < (qty ?? 0)
+                      })
+                    : false
                   return (
-                    <div key={bp.id} className="recipe-card">
+                    <div
+                      key={bp.id}
+                      className={`recipe-card${!unlocked ? ' locked level-gated' : ''}`}
+                    >
                       <div className="recipe-top">
-                        <span className="big-emoji">{bp.emoji}</span>
+                        <GearIcon blueprint={bp} className="big-emoji" />
                         <div>
                           <strong>{bp.name}</strong>
+                          <p className="muted recipe-stars">
+                            {formatRecipeStars(star)}
+                            {star > 0 && (
+                              <> · crafted {gearRecipeCraftCount[bp.id] ?? 0}×</>
+                            )}
+                          </p>
                           <p className="muted">
                             Base {QUALITY_LABEL[bp.quality]} ·{' '}
-                            {GEAR_SLOT_LABEL[bp.slot]} · {formatLeft(bp.craftMs)}
+                            {GEAR_SLOT_LABEL[bp.slot]} ·{' '}
+                            {formatLeft(bp.craftMs)}
                           </p>
-                          <p className="muted small">
-                            Chance to roll higher quality when crafting
-                          </p>
-                          <p className="muted">
-                            ⚔️ {stats.attack} 🛡️ {stats.defense} ❤️ {stats.hp} ·
-                            skill +{stats.skillBonus}
-                          </p>
+                          {unlocked ? (
+                            <p className="muted">
+                              ⚔️ {stats.attack} 🛡️ {stats.defense} ❤️{' '}
+                              {stats.hp} · skill +{stats.skillBonus}
+                            </p>
+                          ) : unlockHint ? (
+                            <p className="muted">
+                              🔒 Craft {unlockHint.prevName}{' '}
+                              {unlockHint.current}/{unlockHint.required}× to
+                              unlock
+                            </p>
+                          ) : (
+                            <p className="muted">🔒 Locked</p>
+                          )}
                         </div>
                       </div>
-                      <IngredientBar
-                        items={Object.entries(bp.inputs).map(([id, qty]) => ({
-                          id: id as CraftResourceId,
-                          qty: qty ?? 0,
-                        }))}
-                        inventory={inventory}
-                        materials={materials}
-                        onNeedResource={navigateToResource}
-                        label={false}
-                        compact
-                      />
-                      <button
-                        type="button"
-                        className="btn full"
-                        disabled={missing}
-                        onClick={() => startGearCraft(bp.id)}
-                      >
-                        Craft blueprint
-                      </button>
+                      {unlocked && (
+                        <>
+                          <IngredientBar
+                            items={Object.entries(bp.inputs).map(
+                              ([id, qty]) => ({
+                                id: id as CraftResourceId,
+                                qty: qty ?? 0,
+                              }),
+                            )}
+                            inventory={inventory}
+                            materials={materials}
+                            onNeedResource={navigateToResource}
+                            label={false}
+                            compact
+                          />
+                          <button
+                            type="button"
+                            className="btn full"
+                            disabled={missing}
+                            onClick={() => startGearCraft(bp.id)}
+                          >
+                            Craft blueprint
+                          </button>
+                        </>
+                      )}
                     </div>
                   )
                 })}
@@ -4433,6 +4644,8 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle('theme-dark', darkMode)
+    const meta = document.querySelector('meta[name="theme-color"]')
+    if (meta) meta.setAttribute('content', darkMode ? '#080510' : '#ddd0f5')
   }, [darkMode])
 
   useEffect(() => {
