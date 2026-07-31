@@ -14,7 +14,7 @@ import {
   gatherSlotCost,
   materialRecipeYield,
 } from './data/gatherSites'
-import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
+import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
 import {
   animalSpeedUpgradeCost,
   effectiveMs,
@@ -53,6 +53,11 @@ import {
   isMissionLevelGated,
   resolveActiveMission,
 } from './data/missions'
+import {
+  mergeMissionBuildingUnlocks,
+  isBuildingRequiredByMission,
+  isRecipeRequiredByMission,
+} from './data/missionCraftUnlock'
 import { LEGACY_MISSION_ID_MAP } from './data/missionChain'
 import { buildingUnlockLevel, unlocksCrossingLevels, unlocksForLevel } from './data/levelUnlocks'
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
@@ -461,6 +466,10 @@ function levelUnlockSubtitle(levelIds: UnlockId[], newLevel: number): string {
     return `Reached Level ${TAVERN_UNLOCK_LEVEL}!`
   }
   return `Reached Level ${newLevel}!`
+}
+
+function activeMissionDef(activeMissionId: string | null): MissionDef | null {
+  return activeMissionId ? (MISSION_BY_ID[activeMissionId] ?? null) : null
 }
 
 function syncLevelUnlocks(xp: number, unlocked: UnlockId[]): UnlockId[] {
@@ -1119,6 +1128,7 @@ export interface GameState {
   toggleDarkMode: () => void
   isTabPulsing: (tab: TabId) => boolean
   isUnlocked: (id: UnlockId) => boolean
+  isBlueprintAvailable: (id: UnlockId) => boolean
   isBuildingOwned: (id: BuildingId) => boolean
   isOrdersOpen: () => boolean
   isMarketOpen: () => boolean
@@ -1395,6 +1405,13 @@ export const useGame = create<GameState>()(
           get().contextGuideTab,
         ),
       isUnlocked: (id) => get().unlocked.includes(id),
+  isBlueprintAvailable: (id) => {
+    const s = get()
+    return (
+      s.unlocked.includes(id) ||
+      isBuildingRequiredByMission(activeMissionDef(s.activeMissionId), id as BuildingId)
+    )
+  },
       isBuildingOwned: (id) => get().ownedBuildings.includes(id),
       isOrdersOpen: () => get().unlocked.includes('orders_board'),
       isMarketOpen: () => {
@@ -1480,7 +1497,10 @@ export const useGame = create<GameState>()(
           return
         }
 
-        const machineId = machineBuildingForItem(itemId, s.unlocked)
+        const machineId = machineBuildingForItem(
+          itemId,
+          mergeMissionBuildingUnlocks(s.unlocked, activeMissionDef(s.activeMissionId)),
+        )
         if (machineId) {
           const recipe = recipeProducing(itemId)
           set({
@@ -1510,6 +1530,23 @@ export const useGame = create<GameState>()(
 
         const recipe = recipeProducing(itemId)
         if (recipe) {
+          const effective = mergeMissionBuildingUnlocks(
+            s.unlocked,
+            activeMissionDef(s.activeMissionId),
+          )
+          if (effective.includes(recipe.buildingId)) {
+            set({
+              tab: 'machines',
+              selectedBuilding: recipe.buildingId,
+              shopScrollTarget: null,
+              machineScrollTarget: recipe.id,
+              guideItemHighlights: [
+                ...new Set([...s.guideItemHighlights, itemId]),
+              ],
+              toast: `Make ${meta.name} at the ${BUILDINGS[recipe.buildingId].name}`,
+            })
+            return
+          }
           set({
             toast: `Unlock the ${BUILDINGS[recipe.buildingId].name} via Missions first`,
           })
@@ -1987,7 +2024,10 @@ export const useGame = create<GameState>()(
         const recipe = RECIPES.find((r) => r.id === recipeId)
         if (!recipe) return
         const s = get()
-        if (!s.unlocked.includes(recipe.buildingId)) {
+        const blueprintOk =
+          s.unlocked.includes(recipe.buildingId) ||
+          isBuildingRequiredByMission(activeMissionDef(s.activeMissionId), recipe.buildingId)
+        if (!blueprintOk) {
           set({ toast: 'Machine blueprint locked — check Missions' })
           return
         }
@@ -1995,8 +2035,11 @@ export const useGame = create<GameState>()(
           set({ toast: 'Purchase this machine first' })
           return
         }
+        const missionCraft =
+          s.activeMissionId != null &&
+          isRecipeRequiredByMission(activeMissionDef(s.activeMissionId), recipeId)
         const needLevel = recipeUnlockLevel(recipeId)
-        if (levelFromXp(s.xp) < needLevel) {
+        if (!missionCraft && levelFromXp(s.xp) < needLevel) {
           set({ toast: `Reach Level ${needLevel} to craft this` })
           return
         }
@@ -2093,7 +2136,10 @@ export const useGame = create<GameState>()(
         const building = BUILDINGS[id]
         if (!building) return
         const s = get()
-        if (!s.unlocked.includes(id)) {
+        if (
+          !s.unlocked.includes(id) &&
+          !isBuildingRequiredByMission(activeMissionDef(s.activeMissionId), id)
+        ) {
           set({ toast: 'Blueprint locked — level up to unlock' })
           return
         }
@@ -2122,8 +2168,8 @@ export const useGame = create<GameState>()(
           return
         }
         const bonus = s.machineQueueBonus[id] ?? 0
-        if (bonus >= MAX_QUEUE_BONUS) {
-          set({ toast: `${building.name} queue is maxed out` })
+        if (machineQueueSize(id, s.machineQueueBonus) >= MAX_MACHINE_QUEUE) {
+          set({ toast: `${building.name} queue is maxed out (${MAX_MACHINE_QUEUE} slots)` })
           return
         }
         const cost = queueUpgradeCost(id, bonus)
@@ -3335,4 +3381,4 @@ export function missionGoalProgress(
   return progress[`${parentId}:${goalId}`] ?? 0
 }
 
-export { MAX_PLOTS, MAX_TREE_SLOTS, EVENTS, BUILDINGS, TAVERN_UNLOCK_LEVEL, ORDERS_UNLOCK_LEVEL, MARKET_UNLOCK_LEVEL, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS }
+export { MAX_PLOTS, MAX_TREE_SLOTS, EVENTS, BUILDINGS, TAVERN_UNLOCK_LEVEL, ORDERS_UNLOCK_LEVEL, MARKET_UNLOCK_LEVEL, BASE_MACHINE_QUEUE, MAX_MACHINE_QUEUE, MAX_QUEUE_BONUS }

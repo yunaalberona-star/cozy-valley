@@ -1,14 +1,19 @@
 import type { BuildingDef, BuildingId, ItemId, RecipeDef } from '../types'
 
 export const BASE_MACHINE_QUEUE = 3
-export const MAX_QUEUE_BONUS = 3
+/** Hard cap on craft queue slots per machine (base + upgrades). */
+export const MAX_MACHINE_QUEUE = 6
+export const MAX_QUEUE_BONUS = MAX_MACHINE_QUEUE - BASE_MACHINE_QUEUE
 export const ORDERS_UNLOCK_LEVEL = 3
 
 export function machineQueueSize(
   buildingId: BuildingId,
   bonus: Partial<Record<BuildingId, number>> = {},
 ): number {
-  return BASE_MACHINE_QUEUE + (bonus[buildingId] ?? 0)
+  return Math.min(
+    MAX_MACHINE_QUEUE,
+    BASE_MACHINE_QUEUE + (bonus[buildingId] ?? 0),
+  )
 }
 
 export function queueUpgradeCost(

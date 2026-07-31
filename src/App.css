@@ -1034,6 +1034,48 @@ html.theme-dark .ingredient-chip.need {
   font-size: 0.65rem;
 }
 
+.inv-sell-qty {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+  margin-top: 2px;
+}
+
+.inv-sell-stepper {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+
+.inv-sell-stepper .btn.tiny {
+  padding: 4px 5px;
+  font-size: 0.65rem;
+  min-width: 0;
+}
+
+.inv-sell-stepper-input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 2px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  text-align: center;
+  font: inherit;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.inv-sell-qty-btn {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  font-size: 0.65rem;
+}
+
 .tabnav {
   display: grid;
   grid-template-columns: repeat(9, 1fr);

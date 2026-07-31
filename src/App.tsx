@@ -10,7 +10,7 @@ import {
 import {
   BUILDINGS,
   ITEM_META,
-  MAX_QUEUE_BONUS,
+  MAX_MACHINE_QUEUE,
   ORDERS_UNLOCK_LEVEL,
   queueUpgradeCost,
 } from './game/data/buildings'
@@ -939,7 +939,10 @@ function MachinesView() {
   const xp = useGame((s) => s.xp)
   const { level } = xpProgress(xp)
   const coins = useGame((s) => s.coins)
-  const unlocked = useGame((s) => s.unlocked)
+  const isBlueprintAvailable = useGame((s) => s.isBlueprintAvailable)
+  const activeMission = useGame((s) =>
+    s.activeMissionId ? MISSION_BY_ID[s.activeMissionId] : null,
+  )
   const ownedBuildings = useGame((s) => s.ownedBuildings)
   const machineQueueBonus = useGame((s) => s.machineQueueBonus)
   const guideItemHighlights = useGame((s) => s.guideItemHighlights)
@@ -959,7 +962,7 @@ function MachinesView() {
   const navigateToResource = useGame((s) => s.navigateToResource)
 
   const open =
-    selectedBuilding && unlocked.includes(selectedBuilding)
+    selectedBuilding && isBlueprintAvailable(selectedBuilding)
       ? selectedBuilding
       : null
   const building = open ? BUILDINGS[open] : null
@@ -999,7 +1002,7 @@ function MachinesView() {
       {!open && (
         <div className="machine-grid">
           {sortedMachineBuildings().map((b) => {
-            const blueprintLocked = !unlocked.includes(b.id)
+            const blueprintLocked = !isBlueprintAvailable(b.id)
             const isOwned = ownedBuildings.includes(b.id)
             const canBuy = !blueprintLocked && !isOwned
             return (
@@ -1087,7 +1090,7 @@ function MachinesView() {
             </p>
           </div>
 
-          {queueBonus < MAX_QUEUE_BONUS && (
+          {queueCap < MAX_MACHINE_QUEUE && (
             <button
               type="button"
               className="btn secondary full"
@@ -1095,7 +1098,7 @@ function MachinesView() {
               onClick={() => upgradeMachineQueue(open)}
             >
               Upgrade queue +1 · 🪙 {queueUpgradeCost(open, queueBonus)} (
-              {queueCap} → {queueCap + 1})
+              {queueCap} → {queueCap + 1}, max {MAX_MACHINE_QUEUE})
             </button>
           )}
 
@@ -1146,7 +1149,11 @@ function MachinesView() {
 
           <div className="card-list">
             {recipes.map((recipe) => {
-              const recipeLocked = !isRecipeUnlocked(recipe.id, level)
+              const recipeLocked = !isRecipeUnlocked(
+                recipe.id,
+                level,
+                activeMission,
+              )
               const missing = Object.entries(recipe.inputs).some(([id, qty]) => {
                 const need = qty ?? 0
                 if (id in MATERIAL_META) {
@@ -2264,6 +2271,80 @@ type PendingSell = {
   unitPrice: number
 }
 
+function InvSellQtyRow({
+  value,
+  max,
+  onChange,
+  onSell,
+}: {
+  value: number
+  max: number
+  onChange: (next: number) => void
+  onSell: () => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  const commitDraft = (raw: string) => {
+    const next = parseMarketDraft(raw, 1, max)
+    onChange(next)
+    setDraft(String(next))
+  }
+
+  const step = (delta: number) => {
+    const next = clampMarketNumber(value + delta, 1, max)
+    onChange(next)
+    setDraft(String(next))
+  }
+
+  return (
+    <div className="inv-sell-qty">
+      <div className="inv-sell-stepper">
+        <button
+          type="button"
+          className="btn tiny"
+          disabled={value <= 1}
+          aria-label="Decrease quantity"
+          onClick={() => step(-1)}
+        >
+          −
+        </button>
+        <input
+          className="inv-sell-stepper-input"
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          aria-label="Quantity to sell"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, ''))}
+          onBlur={() => commitDraft(draft)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              commitDraft(draft)
+              onSell()
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="btn tiny"
+          disabled={value >= max}
+          aria-label="Increase quantity"
+          onClick={() => step(1)}
+        >
+          +
+        </button>
+      </div>
+      <button type="button" className="btn tiny inv-sell-qty-btn" onClick={onSell}>
+        Sell
+      </button>
+    </div>
+  )
+}
+
 function SellableCell({
   emoji,
   name,
@@ -2277,6 +2358,16 @@ function SellableCell({
   unitPrice: number
   onSell: (amount: number) => void
 }) {
+  const [customQty, setCustomQty] = useState(1)
+
+  useEffect(() => {
+    setCustomQty((prev) => clampMarketNumber(prev, 1, qty))
+  }, [qty])
+
+  const sellCustom = () => {
+    onSell(clampMarketNumber(customQty, 1, qty))
+  }
+
   return (
     <div className="inv-cell sellable">
       <span>{emoji}</span>
@@ -2291,6 +2382,12 @@ function SellableCell({
           All
         </button>
       </div>
+      <InvSellQtyRow
+        value={customQty}
+        max={qty}
+        onChange={setCustomQty}
+        onSell={sellCustom}
+      />
     </div>
   )
 }
