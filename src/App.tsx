@@ -206,6 +206,26 @@ function GearIcon({
   return <span className={className}>{blueprint.emoji}</span>
 }
 
+function BuildingIcon({
+  building,
+  className,
+}: {
+  building: { emoji: string; icon?: string; name: string }
+  className?: string
+}) {
+  if (building.icon) {
+    return (
+      <img
+        src={building.icon}
+        alt=""
+        aria-hidden
+        className={['gear-icon', className].filter(Boolean).join(' ')}
+      />
+    )
+  }
+  return <span className={className}>{building.emoji}</span>
+}
+
 const TABS: { id: TabId; label: string; emoji: string }[] = [
   { id: 'missions', label: 'Missions', emoji: '📜' },
   { id: 'farm', label: 'Farm', emoji: '🌱' },
@@ -1752,7 +1772,7 @@ function MachinesView() {
                   disabled={blueprintLocked}
                   onClick={() => !blueprintLocked && selectBuilding(b.id)}
                 >
-                  <span className="big-emoji">{b.emoji}</span>
+                  <BuildingIcon building={b} className="big-emoji" />
                   <strong>{b.name}</strong>
                   <small>
                     {blueprintLocked
@@ -1789,7 +1809,7 @@ function MachinesView() {
           </button>
           <div className="recipe-card highlight">
             <div className="recipe-top">
-              <span className="big-emoji">{building.emoji}</span>
+              <BuildingIcon building={building} className="big-emoji" />
               <div>
                 <strong>{building.name}</strong>
                 <p className="muted">{building.blurb}</p>
@@ -1818,8 +1838,9 @@ function MachinesView() {
             ← All machines
           </button>
           <div className="panel-head">
-            <h2>
-              {building.emoji} {building.name}
+            <h2 className="panel-head-with-icon">
+              <BuildingIcon building={building} className="panel-head-icon" />
+              {building.name}
             </h2>
             <p>
               {building.blurb} · Queue {queue.length}/{queueCap}
@@ -3741,7 +3762,7 @@ function ShopUpgradePane() {
               return (
                 <div key={id} className="recipe-card">
                   <div className="recipe-top">
-                    <span className="big-emoji">{building.emoji}</span>
+                    <BuildingIcon building={building} className="big-emoji" />
                     <div>
                       <strong>{building.name}</strong>
                       <p className="muted">

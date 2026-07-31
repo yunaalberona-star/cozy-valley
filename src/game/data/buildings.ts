@@ -29,6 +29,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
     id: 'mill',
     name: 'Mill',
     emoji: '🌬️',
+    icon: '/icons/buildings/mill.png',
     blurb: 'Grind grains into flour — your Dutch Mill.',
     buyCost: 55,
   },

@@ -289,6 +289,8 @@ export interface BuildingDef {
   id: BuildingId
   name: string
   emoji: string
+  /** Optional PNG/SVG path — overrides emoji in UI */
+  icon?: string
   blurb: string
   /** Coin cost to build after mission unlock */
   buyCost: number

@@ -386,6 +386,18 @@ button {
   animation: rise 0.45s ease both;
 }
 
+.panel-head-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-head-icon {
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+}
+
 .panel-head {
   margin-bottom: 14px;
 }
