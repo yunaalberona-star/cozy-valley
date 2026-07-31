@@ -85,6 +85,15 @@ import {
 } from './game/marketClient'
 import { unlockLabel } from './game/unlocks'
 import { tabShouldPulse } from './game/guides'
+import { SORTED_TREE_LIST, TREES } from './game/data/trees'
+import {
+  animalSpeedUpgradeCost,
+  effectiveMs,
+  farmSpeedUpgradeCost,
+  machineSpeedUpgradeCost,
+  MAX_SPEED_LEVEL,
+  speedLevelLabel,
+} from './game/data/upgrades'
 import {
   adventureProgress,
   adventureReady,
@@ -95,7 +104,11 @@ import {
   missionGoalProgress,
   plotProgress,
   plotUnlockCost,
+  treeProgress,
+  treeReady,
+  treeSlotUnlockCost,
   MAX_PLOTS,
+  MAX_TREE_SLOTS,
   useGame,
 } from './game/store'
 import {
@@ -584,9 +597,11 @@ function MissionsView() {
   )
 }
 
-function FarmView() {
+function FarmPlotsPane() {
   const now = useNow()
+  const coins = useGame((s) => s.coins)
   const plots = useGame((s) => s.plots)
+  const farmSpeedLevel = useGame((s) => s.farmSpeedLevel)
   const seeds = useGame((s) => s.seeds)
   const selectedCrop = useGame((s) => s.selectedCrop)
   const selectCrop = useGame((s) => s.selectCrop)
@@ -594,16 +609,11 @@ function FarmView() {
   const harvest = useGame((s) => s.harvest)
   const unlockPlot = useGame((s) => s.unlockPlot)
   const isCropAvailable = useGame((s) => s.isCropAvailable)
-  const unlockCost = plotUnlockCost(plots.length)
   const available = SORTED_CROP_LIST.filter((c) => isCropAvailable(c.id))
+  const plotCost = plotUnlockCost(plots.length)
 
   return (
-    <div className="panel farm-panel">
-      <div className="panel-head">
-        <h2>Your farm</h2>
-        <p>Tap empty soil to plant. Crops never wither.</p>
-      </div>
-
+    <>
       <div className="seed-row" role="listbox" aria-label="Selected seed">
         {available.map((crop) => {
           const count = seeds[crop.id] ?? 0
@@ -629,8 +639,8 @@ function FarmView() {
 
       <div className="plot-grid">
         {plots.map((plot, i) => {
-          const ready = isReady(plot, now)
-          const progress = plotProgress(plot, now)
+          const ready = isReady(plot, now, farmSpeedLevel)
+          const progress = plotProgress(plot, now, farmSpeedLevel)
           const crop = plot.cropId ? CROPS[plot.cropId] : null
           const stage =
             !crop || !plot.plantedAt
@@ -667,9 +677,12 @@ function FarmView() {
                     </span>
                   )}
                   {ready && <span className="plot-ready">Ready</span>}
-                  {!ready && plot.plantedAt != null && (
+                  {!ready && plot.plantedAt != null && crop && (
                     <span className="plot-time">
-                      {formatLeft(crop.growMs - (now - plot.plantedAt))}
+                      {formatLeft(
+                        effectiveMs(crop.growMs, farmSpeedLevel) -
+                          (now - plot.plantedAt),
+                      )}
                     </span>
                   )}
                 </>
@@ -682,10 +695,178 @@ function FarmView() {
       </div>
 
       {plots.length < MAX_PLOTS && (
-        <button type="button" className="btn secondary full" onClick={unlockPlot}>
-          Unlock plot · 🪙 {unlockCost}
+        <button
+          type="button"
+          className="btn secondary full"
+          disabled={coins < plotCost}
+          onClick={unlockPlot}
+        >
+          Unlock plot slot · 🪙 {plotCost} ({plots.length}/{MAX_PLOTS})
         </button>
       )}
+    </>
+  )
+}
+
+function FarmTreesPane() {
+  const now = useNow()
+  const coins = useGame((s) => s.coins)
+  const farmSpeedLevel = useGame((s) => s.farmSpeedLevel)
+  const treeSlots = useGame((s) => s.treeSlots)
+  const saplings = useGame((s) => s.saplings)
+  const selectedTree = useGame((s) => s.selectedTree)
+  const selectTree = useGame((s) => s.selectTree)
+  const plantTree = useGame((s) => s.plantTree)
+  const harvestTree = useGame((s) => s.harvestTree)
+  const unlockTreeSlot = useGame((s) => s.unlockTreeSlot)
+  const isTreeAvailable = useGame((s) => s.isTreeAvailable)
+  const available = SORTED_TREE_LIST.filter((t) => isTreeAvailable(t.id))
+  const treeCost = treeSlotUnlockCost(treeSlots.length)
+
+  return (
+    <>
+      <p className="muted pad small">
+        Trees stay planted after harvest — only the growth timer resets.
+      </p>
+
+      <div className="seed-row" role="listbox" aria-label="Selected sapling">
+        {available.map((tree) => {
+          const count = saplings[tree.id] ?? 0
+          const active = selectedTree === tree.id
+          return (
+            <button
+              key={tree.id}
+              type="button"
+              role="option"
+              aria-selected={active}
+              className={`seed-chip ${active ? 'active' : ''}`}
+              onClick={() => selectTree(tree.id)}
+            >
+              <span className="seed-emoji">{tree.emoji}</span>
+              <span className="seed-meta">
+                <strong>{tree.name}</strong>
+                <small>{count} saplings</small>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="plot-grid tree-grid">
+        {treeSlots.map((slot, i) => {
+          const tree = slot.treeId ? TREES[slot.treeId] : null
+          const empty = !tree
+          const ready = !empty && treeReady(slot, now, farmSpeedLevel)
+          const progress = treeProgress(slot, now, farmSpeedLevel)
+          const stage = empty
+            ? 'empty'
+            : ready
+              ? 'ready'
+              : progress < 0.33
+                ? 'sprout'
+                : progress < 0.66
+                  ? 'grow'
+                  : 'almost'
+
+          return (
+            <button
+              key={i}
+              type="button"
+              className={`plot tree-slot stage-${stage} ${ready ? 'pulse' : ''}`}
+              onClick={() => {
+                if (empty) plantTree(i)
+                else if (ready) harvestTree(i)
+              }}
+              aria-label={
+                tree
+                  ? ready
+                    ? `Harvest ${tree.name} — tree stays`
+                    : `${tree.name} growing`
+                  : 'Empty tree slot'
+              }
+            >
+              <span className="plot-soil tree-soil" />
+              {tree ? (
+                <>
+                  <span className="plot-crop tree-crop">{tree.emoji}</span>
+                  {!ready && slot.plantedAt != null && (
+                    <span className="plot-bar">
+                      <span style={{ width: `${progress * 100}%` }} />
+                    </span>
+                  )}
+                  {ready && <span className="plot-ready">Ready</span>}
+                  {!ready && slot.plantedAt != null && tree && (
+                    <span className="plot-time">
+                      {formatLeft(
+                        effectiveMs(tree.growMs, farmSpeedLevel) -
+                          (now - slot.plantedAt),
+                      )}
+                    </span>
+                  )}
+                  <span className="tree-persist" title="Tree stays after harvest">
+                    🌳
+                  </span>
+                </>
+              ) : (
+                <span className="plot-empty">+</span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {treeSlots.length < MAX_TREE_SLOTS && (
+        <button
+          type="button"
+          className="btn secondary full"
+          disabled={coins < treeCost}
+          onClick={unlockTreeSlot}
+        >
+          Unlock tree slot · 🪙 {treeCost} ({treeSlots.length}/{MAX_TREE_SLOTS})
+        </button>
+      )}
+    </>
+  )
+}
+
+function FarmView() {
+  const farmPane = useGame((s) => s.farmPane)
+  const setFarmPane = useGame((s) => s.setFarmPane)
+
+  return (
+    <div className="panel farm-panel">
+      <div className="panel-head">
+        <h2>Your farm</h2>
+        <p>
+          {farmPane === 'plots'
+            ? 'Tap empty soil to plant. Crops never wither.'
+            : 'Plant saplings from the shop — trees persist after every harvest.'}
+        </p>
+      </div>
+
+      <div className="pane-tabs pane-tabs-2" role="tablist" aria-label="Farm areas">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={farmPane === 'plots'}
+          className={farmPane === 'plots' ? 'active' : ''}
+          onClick={() => setFarmPane('plots')}
+        >
+          🌱 Plots
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={farmPane === 'trees'}
+          className={farmPane === 'trees' ? 'active' : ''}
+          onClick={() => setFarmPane('trees')}
+        >
+          🌳 Trees
+        </button>
+      </div>
+
+      {farmPane === 'plots' && <FarmPlotsPane />}
+      {farmPane === 'trees' && <FarmTreesPane />}
     </div>
   )
 }
@@ -1041,6 +1222,7 @@ function AnimalsView() {
   const feedAnimal = useGame((s) => s.feedAnimal)
   const collectAnimal = useGame((s) => s.collectAnimal)
   const navigateToResource = useGame((s) => s.navigateToResource)
+  const animalSpeedLevel = useGame((s) => s.animalSpeedLevel)
 
   const open =
     selectedAnimalBuilding && unlocked.includes(selectedAnimalBuilding)
@@ -1169,8 +1351,10 @@ function AnimalsView() {
             )}
 
             {owned.map((a) => {
-              const ready = animalReady(a, now)
-              const prog = animalProgress(a, now)
+              const speedLevel = animalSpeedLevel[a.typeId] ?? 0
+              const produceMs = effectiveMs(def.produceMs, speedLevel)
+              const ready = animalReady(a, now, speedLevel)
+              const prog = animalProgress(a, now, speedLevel)
               const needsFeed = a.startedAt == null && Boolean(def.feedItem)
               const feedMeta = def.feedItem ? ITEM_META[def.feedItem] : null
               return (
@@ -1222,9 +1406,7 @@ function AnimalsView() {
                     </button>
                   ) : (
                     <span className="muted">
-                      {formatLeft(
-                        def.produceMs - (now - (a.startedAt ?? now)),
-                      )}
+                      {formatLeft(produceMs - (now - (a.startedAt ?? now)))}
                     </span>
                   )}
                 </div>
@@ -2410,7 +2592,7 @@ function RecruitCard({
   )
 }
 
-function ShopView() {
+function ShopSeedPane() {
   const coins = useGame((s) => s.coins)
   const buySeed = useGame((s) => s.buySeed)
   const isCropAvailable = useGame((s) => s.isCropAvailable)
@@ -2429,43 +2611,276 @@ function ShopView() {
   }, [shopScrollTarget, clearShopScrollTarget])
 
   return (
+    <div className="card-list">
+      {SORTED_CROP_LIST.map((crop) => {
+        const locked = !isCropAvailable(crop.id)
+        return (
+          <div
+            key={crop.id}
+            id={`shop-seed-${crop.id}`}
+            className={`recipe-card ${locked ? 'locked' : ''} ${!locked && (guideItemHighlights.includes(crop.id) || shopScrollTarget === crop.id) ? 'guide-pulse-frame' : ''}`}
+          >
+            <div className="recipe-top">
+              <span className="big-emoji">{crop.emoji}</span>
+              <div>
+                <strong>{crop.name}</strong>
+                <p className="muted">
+                  {locked
+                    ? '🔒 Unlock via missions'
+                    : `Grows in ${formatLeft(crop.growMs)} · ×${crop.harvestQty}`}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn full"
+              disabled={locked || coins < crop.seedCost}
+              onClick={() => buySeed(crop.id, 1)}
+            >
+              Buy seed · 🪙 {crop.seedCost}
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ShopTreePane() {
+  const coins = useGame((s) => s.coins)
+  const buySapling = useGame((s) => s.buySapling)
+  const isTreeAvailable = useGame((s) => s.isTreeAvailable)
+  const guideItemHighlights = useGame((s) => s.guideItemHighlights)
+  const shopTreeScrollTarget = useGame((s) => s.shopTreeScrollTarget)
+  const clearShopTreeScrollTarget = useGame((s) => s.clearShopTreeScrollTarget)
+
+  useEffect(() => {
+    if (!shopTreeScrollTarget) return
+    const frame = requestAnimationFrame(() => {
+      const el = document.getElementById(`shop-tree-${shopTreeScrollTarget}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      clearShopTreeScrollTarget()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [shopTreeScrollTarget, clearShopTreeScrollTarget])
+
+  return (
+    <div className="card-list">
+      {SORTED_TREE_LIST.map((tree) => {
+        const locked = !isTreeAvailable(tree.id)
+        const productMeta = ITEM_META[tree.product]
+        return (
+          <div
+            key={tree.id}
+            id={`shop-tree-${tree.id}`}
+            className={`recipe-card ${locked ? 'locked' : ''} ${!locked && (guideItemHighlights.includes(tree.id) || shopTreeScrollTarget === tree.id) ? 'guide-pulse-frame' : ''}`}
+          >
+            <div className="recipe-top">
+              <span className="big-emoji">{tree.emoji}</span>
+              <div>
+                <strong>{tree.name}</strong>
+                <p className="muted">
+                  {locked
+                    ? `🔒 Level ${tree.unlockLevel}`
+                    : `Yields ${productMeta.emoji} ${productMeta.name} · ${formatLeft(tree.growMs)} · ×${tree.harvestQty} · tree persists`}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn full"
+              disabled={locked || coins < tree.saplingCost}
+              onClick={() => buySapling(tree.id, 1)}
+            >
+              Buy sapling · 🪙 {tree.saplingCost}
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ShopUpgradePane() {
+  const coins = useGame((s) => s.coins)
+  const farmSpeedLevel = useGame((s) => s.farmSpeedLevel)
+  const ownedBuildings = useGame((s) => s.ownedBuildings)
+  const machineSpeedLevel = useGame((s) => s.machineSpeedLevel)
+  const animals = useGame((s) => s.animals)
+  const animalSpeedLevel = useGame((s) => s.animalSpeedLevel)
+  const upgradeFarmSpeed = useGame((s) => s.upgradeFarmSpeed)
+  const upgradeMachineSpeed = useGame((s) => s.upgradeMachineSpeed)
+  const upgradeAnimalSpeed = useGame((s) => s.upgradeAnimalSpeed)
+
+  const ownedAnimalTypes = [
+    ...new Set(animals.map((a) => a.typeId)),
+  ] as AnimalTypeId[]
+  const farmCost = farmSpeedUpgradeCost(farmSpeedLevel)
+
+  return (
+    <div className="card-list">
+      <p className="muted pad small">
+        Permanent timer speed-ups — pricey, but they stack up to {MAX_SPEED_LEVEL}{' '}
+        tiers (12% faster per tier). Queue slot upgrades stay on each machine.
+      </p>
+
+      <div className="recipe-card highlight">
+        <div className="recipe-top">
+          <span className="big-emoji">🌾</span>
+          <div>
+            <strong>Farm growth speed</strong>
+            <p className="muted">
+              Level {farmSpeedLevel}/{MAX_SPEED_LEVEL} · {speedLevelLabel(farmSpeedLevel)}{' '}
+              · crops & orchard trees
+            </p>
+          </div>
+        </div>
+        {farmSpeedLevel < MAX_SPEED_LEVEL ? (
+          <button
+            type="button"
+            className="btn full"
+            disabled={coins < farmCost}
+            onClick={upgradeFarmSpeed}
+          >
+            Upgrade farm speed · 🪙 {farmCost}
+          </button>
+        ) : (
+          <p className="muted pad small">Farm speed maxed.</p>
+        )}
+      </div>
+
+      {ownedBuildings.length > 0 && (
+        <>
+          <h3 className="section-label">Machines</h3>
+          {[...ownedBuildings]
+            .sort((a, b) => BUILDINGS[a].name.localeCompare(BUILDINGS[b].name))
+            .map((id) => {
+              const building = BUILDINGS[id]
+              const level = machineSpeedLevel[id] ?? 0
+              const cost = machineSpeedUpgradeCost(id, level)
+              return (
+                <div key={id} className="recipe-card">
+                  <div className="recipe-top">
+                    <span className="big-emoji">{building.emoji}</span>
+                    <div>
+                      <strong>{building.name}</strong>
+                      <p className="muted">
+                        Craft speed Lv {level}/{MAX_SPEED_LEVEL} ·{' '}
+                        {speedLevelLabel(level)}
+                      </p>
+                    </div>
+                  </div>
+                  {level < MAX_SPEED_LEVEL ? (
+                    <button
+                      type="button"
+                      className="btn full"
+                      disabled={coins < cost}
+                      onClick={() => upgradeMachineSpeed(id)}
+                    >
+                      Upgrade craft speed · 🪙 {cost}
+                    </button>
+                  ) : (
+                    <p className="muted pad small">Max speed.</p>
+                  )}
+                </div>
+              )
+            })}
+        </>
+      )}
+
+      {ownedAnimalTypes.length > 0 && (
+        <>
+          <h3 className="section-label">Animals</h3>
+          {ownedAnimalTypes
+            .sort((a, b) => ANIMALS[a].name.localeCompare(ANIMALS[b].name))
+            .map((typeId) => {
+              const def = ANIMALS[typeId]
+              const level = animalSpeedLevel[typeId] ?? 0
+              const cost = animalSpeedUpgradeCost(typeId, level)
+              const count = animals.filter((a) => a.typeId === typeId).length
+              return (
+                <div key={typeId} className="recipe-card">
+                  <div className="recipe-top">
+                    <span className="big-emoji">{def.emoji}</span>
+                    <div>
+                      <strong>{def.name}</strong>
+                      <p className="muted">
+                        {count} owned · Produce speed Lv {level}/{MAX_SPEED_LEVEL} ·{' '}
+                        {speedLevelLabel(level)}
+                      </p>
+                    </div>
+                  </div>
+                  {level < MAX_SPEED_LEVEL ? (
+                    <button
+                      type="button"
+                      className="btn full"
+                      disabled={coins < cost}
+                      onClick={() => upgradeAnimalSpeed(typeId)}
+                    >
+                      Upgrade produce speed · 🪙 {cost}
+                    </button>
+                  ) : (
+                    <p className="muted pad small">Max speed.</p>
+                  )}
+                </div>
+              )
+            })}
+        </>
+      )}
+
+      {ownedBuildings.length === 0 && ownedAnimalTypes.length === 0 && (
+        <p className="muted pad small">
+          Build machines or buy animals to unlock their speed upgrades here.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ShopView() {
+  const shopPane = useGame((s) => s.shopPane)
+  const setShopPane = useGame((s) => s.setShopPane)
+
+  return (
     <div className="panel">
       <div className="panel-head">
-        <h2>Seed shop</h2>
-        <p>New crops unlock as you progress through missions.</p>
+        <h2>Shop</h2>
+        <p>Seeds, orchard saplings, and timer speed upgrades.</p>
       </div>
-      <div className="card-list">
-        {SORTED_CROP_LIST.map((crop) => {
-          const locked = !isCropAvailable(crop.id)
-          return (
-            <div
-              key={crop.id}
-              id={`shop-seed-${crop.id}`}
-              className={`recipe-card ${locked ? 'locked' : ''} ${!locked && (guideItemHighlights.includes(crop.id) || shopScrollTarget === crop.id) ? 'guide-pulse-frame' : ''}`}
-            >
-              <div className="recipe-top">
-                <span className="big-emoji">{crop.emoji}</span>
-                <div>
-                  <strong>{crop.name}</strong>
-                  <p className="muted">
-                    {locked
-                      ? '🔒 Unlock via missions'
-                      : `Grows in ${formatLeft(crop.growMs)} · ×${crop.harvestQty}`}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btn full"
-                disabled={locked || coins < crop.seedCost}
-                onClick={() => buySeed(crop.id, 1)}
-              >
-                Buy seed · 🪙 {crop.seedCost}
-              </button>
-            </div>
-          )
-        })}
+
+      <div className="pane-tabs pane-tabs-3" role="tablist" aria-label="Shop">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={shopPane === 'seed'}
+          className={shopPane === 'seed' ? 'active' : ''}
+          onClick={() => setShopPane('seed')}
+        >
+          🌾 Seeds
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={shopPane === 'tree'}
+          className={shopPane === 'tree' ? 'active' : ''}
+          onClick={() => setShopPane('tree')}
+        >
+          🌳 Trees
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={shopPane === 'upgrade'}
+          className={shopPane === 'upgrade' ? 'active' : ''}
+          onClick={() => setShopPane('upgrade')}
+        >
+          ⬆️ Upgrades
+        </button>
       </div>
+
+      {shopPane === 'seed' && <ShopSeedPane />}
+      {shopPane === 'tree' && <ShopTreePane />}
+      {shopPane === 'upgrade' && <ShopUpgradePane />}
     </div>
   )
 }

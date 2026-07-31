@@ -27,6 +27,17 @@ export type CropId =
   | 'mint'
   | 'eggplant'
 
+/** Harvested from orchard trees — not sold as plot seeds. */
+export type TreeProductId = 'orange' | 'cherry' | 'maple_sap' | 'lemon'
+
+export type TreeId =
+  | 'apple_tree'
+  | 'orange_tree'
+  | 'cherry_tree'
+  | 'maple_tree'
+  | 'peach_tree'
+  | 'lemon_tree'
+
 export type AnimalProductId = 'egg' | 'milk' | 'wool' | 'honey' | 'bacon' | 'goat_milk'
 
 export type FeedId =
@@ -74,6 +85,12 @@ export type CraftedId =
   | 'cake'
   | 'rope'
   | 'rabbit_feed'
+  | 'apple_cider'
+  | 'orange_juice'
+  | 'cherry_juice'
+  | 'lemonade'
+  | 'maple_syrup'
+  | 'cherry_pie'
 
 export type MaterialId =
   | 'iron_ore'
@@ -87,7 +104,7 @@ export type MaterialId =
   | 'magic_essence'
   | 'sunstone'
 
-export type ItemId = CropId | AnimalProductId | CraftedId
+export type ItemId = CropId | TreeProductId | AnimalProductId | CraftedId
 
 export type CraftResourceId = ItemId | MaterialId
 
@@ -137,6 +154,8 @@ export type BuildingId =
   | 'miner'
   | 'wood_cutter'
   | 'tannery'
+  | 'orchard_press'
+  | 'maple_sugar_shack'
 
 export type AnimalTypeId =
   | 'chicken'
@@ -194,6 +213,10 @@ export type AdventurePaneId =
 export type GatherSiteId = 'mountain' | 'forest'
 
 export type MaterialsPaneId = GatherSiteId
+
+export type ShopPaneId = 'seed' | 'tree' | 'upgrade'
+
+export type FarmPaneId = 'plots' | 'trees'
 
 export type MissionGoalKind =
   | 'harvest'
@@ -352,6 +375,24 @@ export interface EventDef {
 
 export interface PlotState {
   cropId: CropId | null
+  plantedAt: number | null
+}
+
+export interface TreeDef {
+  id: TreeId
+  name: string
+  emoji: string
+  saplingCost: number
+  growMs: number
+  harvestQty: number
+  product: CropId | TreeProductId
+  xp: number
+  unlockLevel: number
+}
+
+export interface TreeSlotState {
+  treeId: TreeId | null
+  /** Growth timer; null when slot is empty */
   plantedAt: number | null
 }
 

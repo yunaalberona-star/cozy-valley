@@ -486,6 +486,24 @@ button {
   margin-bottom: 14px;
 }
 
+.tree-grid .tree-soil {
+  background:
+    radial-gradient(circle at 50% 65%, #5a8f4a, #3d6b34);
+}
+
+.tree-slot .tree-crop {
+  top: 38%;
+}
+
+.tree-persist {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  font-size: 0.85rem;
+  opacity: 0.75;
+  z-index: 2;
+}
+
 .plot {
   position: relative;
   aspect-ratio: 1;

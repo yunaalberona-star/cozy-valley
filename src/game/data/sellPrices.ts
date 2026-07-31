@@ -1,6 +1,7 @@
 import { ANIMALS } from './animals'
 import { ITEM_META, RECIPES } from './buildings'
 import { CROPS } from './crops'
+import { TREES } from './trees'
 import type { CropId, ItemId, MaterialId } from '../types'
 
 /** Profit margin when selling crafted goods over ingredient sell value. */
@@ -29,6 +30,11 @@ function buildItemSellPrices(): Record<ItemId, number> {
   for (const crop of Object.values(CROPS)) {
     const unitCost = crop.seedCost / crop.harvestQty
     prices[crop.id] = Math.max(2, Math.ceil(unitCost * CROP_PROFIT_MULT))
+  }
+
+  for (const tree of Object.values(TREES)) {
+    const unitCost = tree.saplingCost / tree.harvestQty
+    prices[tree.product] = Math.max(3, Math.ceil(unitCost * CROP_PROFIT_MULT))
   }
 
   // Recipes and animal products depend on each other — iterate until stable.

@@ -1,7 +1,8 @@
 import { ANIMAL_BUILDINGS } from './animalBuildings'
 import { BUILDINGS, RECIPES } from './buildings'
-import type { AnimalBuildingDef, BuildingDef, BuildingId, CraftResourceId, ItemId, MaterialId, RecipeDef } from '../types'
+import type { AnimalBuildingDef, BuildingDef, BuildingId, CraftResourceId, ItemId, MaterialId, RecipeDef, TreeProductId } from '../types'
 import { CROPS } from './crops'
+import { treeProductLevel } from './trees'
 import { BUILDING_LEVEL_UNLOCKS } from './levelUnlocks'
 
 const ANIMAL_PRODUCT_LEVEL: Partial<Record<ItemId, number>> = {
@@ -32,6 +33,8 @@ function inputItemLevel(
 ): number {
   if (id in MATERIAL_LEVEL) return MATERIAL_LEVEL[id as MaterialId] ?? 99
   if (id in CROPS) return CROPS[id as keyof typeof CROPS].unlockLevel
+  const treeLevel = treeProductLevel(id as TreeProductId)
+  if (treeLevel < 99) return treeLevel
   if (ANIMAL_PRODUCT_LEVEL[id as ItemId] != null) {
     return ANIMAL_PRODUCT_LEVEL[id as ItemId]!
   }

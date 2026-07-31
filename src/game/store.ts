@@ -15,7 +15,15 @@ import {
   materialRecipeYield,
 } from './data/gatherSites'
 import { BUILDINGS, ITEM_META, RECIPES, machineQueueSize, ORDERS_UNLOCK_LEVEL, queueUpgradeCost, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS } from './data/buildings'
+import {
+  animalSpeedUpgradeCost,
+  effectiveMs,
+  farmSpeedUpgradeCost,
+  machineSpeedUpgradeCost,
+  MAX_SPEED_LEVEL,
+} from './data/upgrades'
 import { CROPS, cropsCrossingLevels, levelFromXp, xpToReachLevel } from './data/crops'
+import { isTreeProduct, TREES, treeForProduct } from './data/trees'
 import {
   animalBuildingForProduct,
   animalBuildingForMaterial,
@@ -98,18 +106,32 @@ import type {
   PlotState,
   PopupState,
   RecruitedNpc,
+  FarmPaneId,
+  ShopPaneId,
   TabId,
+  TreeId,
+  TreeSlotState,
   UnlockId,
 } from './types'
 
 const START_PLOTS = 6
 const MAX_PLOTS = 16
+const START_TREE_SLOTS = 2
+const MAX_TREE_SLOTS = 8
 const ORDER_SLOTS = 3
-const PLOT_UNLOCK_BASE = 40
+const PLOT_UNLOCK_BASE = 250
+const TREE_SLOT_UNLOCK_BASE = 550
 
 function emptyPlots(count: number): PlotState[] {
   return Array.from({ length: count }, () => ({
     cropId: null,
+    plantedAt: null,
+  }))
+}
+
+function emptyTreeSlots(count: number): TreeSlotState[] {
+  return Array.from({ length: count }, () => ({
+    treeId: null,
     plantedAt: null,
   }))
 }
@@ -905,11 +927,43 @@ function migrateSaveState(
       }
     }
   }
+  if (version < 16) {
+    if (!Array.isArray(state.treeSlots)) {
+      state.treeSlots = emptyTreeSlots(START_TREE_SLOTS)
+    }
+    if (!state.saplings || typeof state.saplings !== 'object') {
+      state.saplings = {}
+    }
+    if (state.selectedTree == null) {
+      state.selectedTree = 'apple_tree'
+    }
+    if (state.shopPane !== 'seed' && state.shopPane !== 'tree' && state.shopPane !== 'upgrade') {
+      state.shopPane = 'seed'
+    }
+    if (state.farmPane !== 'plots' && state.farmPane !== 'trees') {
+      state.farmPane = 'plots'
+    }
+  }
+  if (version < 17) {
+    if (!state.machineSpeedLevel || typeof state.machineSpeedLevel !== 'object') {
+      state.machineSpeedLevel = {}
+    }
+    if (!state.animalSpeedLevel || typeof state.animalSpeedLevel !== 'object') {
+      state.animalSpeedLevel = {}
+    }
+    if (typeof state.farmSpeedLevel !== 'number') {
+      state.farmSpeedLevel = 0
+    }
+  }
   return state
 }
 
 function cropAvailable(cropId: CropId, playerLevel: number): boolean {
   return CROPS[cropId].unlockLevel <= playerLevel
+}
+
+function treeAvailable(treeId: TreeId, playerLevel: number): boolean {
+  return TREES[treeId].unlockLevel <= playerLevel
 }
 
 function addMarketItems(
@@ -970,7 +1024,12 @@ export interface GameState {
   inventory: Partial<Record<ItemId, number>>
   materials: Partial<Record<MaterialId, number>>
   plots: PlotState[]
+  treeSlots: TreeSlotState[]
+  saplings: Partial<Record<TreeId, number>>
   selectedCrop: CropId
+  selectedTree: TreeId
+  shopPane: ShopPaneId
+  farmPane: FarmPaneId
   tab: TabId
   craftQueue: CraftJob[]
   activeOrders: ActiveOrder[]
@@ -978,6 +1037,9 @@ export interface GameState {
   unlocked: UnlockId[]
   ownedBuildings: BuildingId[]
   machineQueueBonus: Partial<Record<BuildingId, number>>
+  machineSpeedLevel: Partial<Record<BuildingId, number>>
+  animalSpeedLevel: Partial<Record<AnimalTypeId, number>>
+  farmSpeedLevel: number
   completedMissions: string[]
   activeMissionId: string | null
   missionProgress: Record<string, number>
@@ -1003,11 +1065,15 @@ export interface GameState {
   contextGuideTab: TabId | null
   darkMode: boolean
   shopScrollTarget: CropId | null
+  shopTreeScrollTarget: TreeId | null
   machineScrollTarget: string | null
   unclaimedMarketSales: MarketSaleClaim[]
 
   setTab: (tab: TabId) => void
+  setShopPane: (pane: ShopPaneId) => void
+  setFarmPane: (pane: FarmPaneId) => void
   selectCrop: (id: CropId) => void
+  selectTree: (id: TreeId) => void
   selectBuilding: (id: BuildingId | null) => void
   selectAnimalBuilding: (id: AnimalBuildingId | null) => void
   selectGearBuilding: (id: GearBuildingId | null) => void
@@ -1023,6 +1089,7 @@ export interface GameState {
   isOrdersOpen: () => boolean
   isMarketOpen: () => boolean
   isCropAvailable: (id: CropId) => boolean
+  isTreeAvailable: (id: TreeId) => boolean
   isTavernOpen: () => boolean
   machineQueueCapacity: (id: BuildingId) => number
 
@@ -1034,17 +1101,25 @@ export interface GameState {
   ) => void
   navigateToMissionGoal: (goal: MissionGoal) => void
   clearShopScrollTarget: () => void
+  clearShopTreeScrollTarget: () => void
   clearMachineScrollTarget: () => void
 
   buySeed: (id: CropId, amount?: number) => void
+  buySapling: (id: TreeId, amount?: number) => void
   plant: (plotIndex: number) => void
   harvest: (plotIndex: number) => void
   unlockPlot: () => void
+  plantTree: (slotIndex: number) => void
+  harvestTree: (slotIndex: number) => void
+  unlockTreeSlot: () => void
 
   startCraft: (recipeId: string) => void
   collectCraft: (index: number) => void
   purchaseBuilding: (id: BuildingId) => void
   upgradeMachineQueue: (id: BuildingId) => void
+  upgradeMachineSpeed: (id: BuildingId) => void
+  upgradeAnimalSpeed: (typeId: AnimalTypeId) => void
+  upgradeFarmSpeed: () => void
 
   buyAnimal: (typeId: AnimalTypeId) => void
   feedAnimal: (animalId: string) => void
@@ -1101,7 +1176,12 @@ const initial = () => {
     inventory: {} as Partial<Record<ItemId, number>>,
     materials: {} as Partial<Record<MaterialId, number>>,
     plots: emptyPlots(START_PLOTS),
+    treeSlots: emptyTreeSlots(START_TREE_SLOTS),
+    saplings: {} as Partial<Record<TreeId, number>>,
     selectedCrop: 'wheat' as CropId,
+    selectedTree: 'apple_tree' as TreeId,
+    shopPane: 'seed' as ShopPaneId,
+    farmPane: 'plots' as FarmPaneId,
     tab: 'missions' as TabId,
     craftQueue: [] as CraftJob[],
     activeOrders: [] as ActiveOrder[],
@@ -1109,6 +1189,9 @@ const initial = () => {
     unlocked: syncLevelUnlocks(0, []) as UnlockId[],
     ownedBuildings: [] as BuildingId[],
     machineQueueBonus: {} as Partial<Record<BuildingId, number>>,
+    machineSpeedLevel: {} as Partial<Record<BuildingId, number>>,
+    animalSpeedLevel: {} as Partial<Record<AnimalTypeId, number>>,
+    farmSpeedLevel: 0,
     completedMissions: [] as string[],
     activeMissionId: missionId as string | null,
     missionProgress: mission ? emptyProgress(mission.goals, missionId) : {},
@@ -1134,6 +1217,7 @@ const initial = () => {
     contextGuideTab: null as TabId | null,
     darkMode: false,
     shopScrollTarget: null as CropId | null,
+    shopTreeScrollTarget: null as TreeId | null,
     machineScrollTarget: null as string | null,
     unclaimedMarketSales: [] as MarketSaleClaim[],
   }
@@ -1198,7 +1282,10 @@ export const useGame = create<GameState>()(
               s.contextGuideTab === tab ? null : s.contextGuideTab,
           }
         }),
+      setShopPane: (pane) => set({ shopPane: pane }),
+      setFarmPane: (pane) => set({ farmPane: pane }),
       selectCrop: (id) => set({ selectedCrop: id }),
+      selectTree: (id) => set({ selectedTree: id }),
       selectBuilding: (id) =>
         set((s) => ({
           selectedBuilding: id,
@@ -1285,6 +1372,8 @@ export const useGame = create<GameState>()(
       },
       isCropAvailable: (id) =>
         cropAvailable(id, levelFromXp(get().xp)),
+      isTreeAvailable: (id) =>
+        treeAvailable(id, levelFromXp(get().xp)),
       isTavernOpen: () => get().unlocked.includes('tavern'),
       machineQueueCapacity: (id) =>
         machineQueueSize(id, get().machineQueueBonus),
@@ -1301,6 +1390,7 @@ export const useGame = create<GameState>()(
           if (seedCount > 0) {
             set({
               tab: 'farm',
+              farmPane: 'plots',
               selectedCrop: itemId,
               shopScrollTarget: null,
               machineScrollTarget: null,
@@ -1311,6 +1401,7 @@ export const useGame = create<GameState>()(
           if (s.isCropAvailable(itemId)) {
             set({
               tab: 'shop',
+              shopPane: 'seed',
               shopScrollTarget: itemId,
               machineScrollTarget: null,
               guideItemHighlights: [
@@ -1321,6 +1412,37 @@ export const useGame = create<GameState>()(
             return
           }
           set({ toast: `${crop.name} seeds locked — finish Missions first` })
+          return
+        }
+
+        if (isTreeProduct(itemId)) {
+          const treeId = treeForProduct(itemId)
+          const meta = ITEM_META[itemId]
+          if (treeId) {
+            const saplingCount = s.saplings[treeId] ?? 0
+            if (saplingCount > 0) {
+              set({
+                tab: 'farm',
+                farmPane: 'trees',
+                selectedTree: treeId,
+                toast: `Selected ${TREES[treeId].name} — tap an empty tree slot to plant`,
+              })
+              return
+            }
+            if (s.isTreeAvailable(treeId)) {
+              set({
+                tab: 'shop',
+                shopPane: 'tree',
+                shopTreeScrollTarget: treeId,
+                guideItemHighlights: [
+                  ...new Set([...s.guideItemHighlights, treeId]),
+                ],
+                toast: `Buy ${TREES[treeId].name} saplings in the shop`,
+              })
+              return
+            }
+          }
+          set({ toast: `${meta.name} comes from orchard trees — level up to unlock` })
           return
         }
 
@@ -1477,6 +1599,8 @@ export const useGame = create<GameState>()(
 
       clearShopScrollTarget: () => set({ shopScrollTarget: null }),
 
+      clearShopTreeScrollTarget: () => set({ shopTreeScrollTarget: null }),
+
       clearMachineScrollTarget: () => set({ machineScrollTarget: null }),
 
       track: (kind, target, amount = 1) => {
@@ -1560,6 +1684,33 @@ export const useGame = create<GameState>()(
         get().track('own_coins', undefined, get().coins)
       },
 
+      buySapling: (id, amount = 1) => {
+        const tree = TREES[id]
+        if (!tree) return
+        if (!get().isTreeAvailable(id)) {
+          set({ toast: 'Tree locked — level up to unlock' })
+          return
+        }
+        const cost = tree.saplingCost * amount
+        if (get().coins < cost) {
+          set({ toast: 'Not enough coins' })
+          return
+        }
+        set((s) => ({
+          coins: s.coins - cost,
+          saplings: { ...s.saplings, [id]: (s.saplings[id] ?? 0) + amount },
+          toast: `Bought ${amount}× ${tree.name} sapling`,
+          guideItemHighlights: s.guideItemHighlights.filter((h) => h !== id),
+          contextGuideTab:
+            s.contextGuideTab === 'shop' ? null : s.contextGuideTab,
+          guideTabPulses:
+            s.contextGuideTab === 'shop'
+              ? s.guideTabPulses.filter((t) => t !== 'shop')
+              : s.guideTabPulses,
+        }))
+        get().track('own_coins', undefined, get().coins)
+      },
+
       plant: (plotIndex) => {
         const s = get()
         const plot = s.plots[plotIndex]
@@ -1594,7 +1745,7 @@ export const useGame = create<GameState>()(
         if (!plot?.cropId || plot.plantedAt == null) return
         const crop = CROPS[plot.cropId]
         if (!crop) return
-        if (Date.now() - plot.plantedAt < crop.growMs) {
+        if (Date.now() - plot.plantedAt < effectiveMs(crop.growMs, s.farmSpeedLevel)) {
           set({ toast: 'Still growing — no rush' })
           return
         }
@@ -1649,6 +1800,99 @@ export const useGame = create<GameState>()(
         get().track('own_coins', undefined, get().coins)
       },
 
+      plantTree: (slotIndex) => {
+        const s = get()
+        const slot = s.treeSlots[slotIndex]
+        if (!slot || slot.treeId) return
+        const treeId = s.selectedTree
+        const tree = TREES[treeId]
+        if (!tree) return
+        if (!s.isTreeAvailable(treeId)) {
+          set({ toast: 'Tree locked — level up to unlock' })
+          return
+        }
+        if ((s.saplings[treeId] ?? 0) < 1) {
+          set((state) => ({
+            toast: 'No saplings — buy some in Shop',
+            tab: 'shop',
+            shopPane: 'tree',
+            ...shopGuidePatch(state),
+          }))
+          return
+        }
+        const treeSlots = s.treeSlots.map((t, i) =>
+          i === slotIndex ? { treeId, plantedAt: Date.now() } : t,
+        )
+        const saplings = { ...s.saplings }
+        const left = (saplings[treeId] ?? 0) - 1
+        if (left <= 0) delete saplings[treeId]
+        else saplings[treeId] = left
+        set({ treeSlots, saplings })
+      },
+
+      harvestTree: (slotIndex) => {
+        const s = get()
+        const slot = s.treeSlots[slotIndex]
+        if (!slot?.treeId || slot.plantedAt == null) return
+        const tree = TREES[slot.treeId]
+        if (!tree) return
+        if (Date.now() - slot.plantedAt < effectiveMs(tree.growMs, s.farmSpeedLevel)) {
+          set({ toast: 'Still growing — trees take patience' })
+          return
+        }
+        const treeSlots = s.treeSlots.map((t, i) =>
+          i === slotIndex
+            ? { treeId: t.treeId, plantedAt: Date.now() }
+            : t,
+        )
+        const xpResult = applyXpGain(
+          s.xp,
+          tree.xp,
+          s.popupQueue,
+          s.unlocked,
+          s.activeOrders,
+          s.seeds,
+        )
+        const guides = unlockGuidePatch(
+          s,
+          xpResult.unlocked,
+          levelFromXp(xpResult.xp),
+        )
+        const productMeta = ITEM_META[tree.product]
+        set({
+          treeSlots,
+          inventory: addItem(s.inventory, tree.product, tree.harvestQty),
+          xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
+          popupQueue: xpResult.popupQueue,
+          activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
+          toast: `Harvested ${tree.harvestQty}× ${productMeta.name} — tree stays planted`,
+        })
+        get().track('harvest', tree.product, tree.harvestQty)
+      },
+
+      unlockTreeSlot: () => {
+        const s = get()
+        if (s.treeSlots.length >= MAX_TREE_SLOTS) {
+          set({ toast: 'Orchard is full for now' })
+          return
+        }
+        const cost = TREE_SLOT_UNLOCK_BASE * s.treeSlots.length
+        if (s.coins < cost) {
+          set({ toast: `Need ${cost} coins` })
+          return
+        }
+        set({
+          coins: s.coins - cost,
+          treeSlots: [...s.treeSlots, { treeId: null, plantedAt: null }],
+          toast: 'New tree slot unlocked!',
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
       startCraft: (recipeId) => {
         const recipe = RECIPES.find((r) => r.id === recipeId)
         if (!recipe) return
@@ -1678,6 +1922,8 @@ export const useGame = create<GameState>()(
           return
         }
         const now = Date.now()
+        const speedLevel = s.machineSpeedLevel[recipe.buildingId] ?? 0
+        const craftMs = effectiveMs(recipe.craftMs, speedLevel)
         const taken = takeResources(s.inventory, s.materials, recipe.inputs)
         set((s) =>
           withMissionProgress(s, {
@@ -1689,7 +1935,7 @@ export const useGame = create<GameState>()(
                 recipeId,
                 buildingId: recipe.buildingId,
                 startedAt: now,
-                doneAt: now + recipe.craftMs,
+                doneAt: now + craftMs,
               },
             ],
             toast: `${building.name}: ${recipe.name}…`,
@@ -1800,6 +2046,80 @@ export const useGame = create<GameState>()(
         get().track('own_coins', undefined, get().coins)
       },
 
+      upgradeMachineSpeed: (id) => {
+        const building = BUILDINGS[id]
+        if (!building) return
+        const s = get()
+        if (!s.ownedBuildings.includes(id)) {
+          set({ toast: 'Build the machine first' })
+          return
+        }
+        const level = s.machineSpeedLevel[id] ?? 0
+        if (level >= MAX_SPEED_LEVEL) {
+          set({ toast: `${building.name} speed is maxed out` })
+          return
+        }
+        const cost = machineSpeedUpgradeCost(id, level)
+        if (s.coins < cost) {
+          set({ toast: `Need ${cost} coins for speed upgrade` })
+          return
+        }
+        const next = level + 1
+        set({
+          coins: s.coins - cost,
+          machineSpeedLevel: { ...s.machineSpeedLevel, [id]: next },
+          toast: `${building.name} crafts ${Math.round((1 - Math.pow(0.88, next)) * 100)}% faster`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      upgradeAnimalSpeed: (typeId) => {
+        const def = ANIMALS[typeId]
+        if (!def) return
+        const s = get()
+        if (!s.animals.some((a) => a.typeId === typeId)) {
+          set({ toast: `Buy a ${def.name} first` })
+          return
+        }
+        const level = s.animalSpeedLevel[typeId] ?? 0
+        if (level >= MAX_SPEED_LEVEL) {
+          set({ toast: `${def.name} speed is maxed out` })
+          return
+        }
+        const cost = animalSpeedUpgradeCost(typeId, level)
+        if (s.coins < cost) {
+          set({ toast: `Need ${cost} coins for speed upgrade` })
+          return
+        }
+        const next = level + 1
+        set({
+          coins: s.coins - cost,
+          animalSpeedLevel: { ...s.animalSpeedLevel, [typeId]: next },
+          toast: `${def.name} produces ${Math.round((1 - Math.pow(0.88, next)) * 100)}% faster`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      upgradeFarmSpeed: () => {
+        const s = get()
+        if (s.farmSpeedLevel >= MAX_SPEED_LEVEL) {
+          set({ toast: 'Farm growth speed is maxed out' })
+          return
+        }
+        const cost = farmSpeedUpgradeCost(s.farmSpeedLevel)
+        if (s.coins < cost) {
+          set({ toast: `Need ${cost} coins for farm speed upgrade` })
+          return
+        }
+        const next = s.farmSpeedLevel + 1
+        set({
+          coins: s.coins - cost,
+          farmSpeedLevel: next,
+          toast: `Crops & trees grow ${Math.round((1 - Math.pow(0.88, next)) * 100)}% faster`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
       buyAnimal: (typeId) => {
         const def = ANIMALS[typeId]
         if (!def) return
@@ -1867,7 +2187,7 @@ export const useGame = create<GameState>()(
         if (!animal?.startedAt) return
         const def = ANIMALS[animal.typeId]
         if (!def) return
-        if (Date.now() - animal.startedAt < def.produceMs) {
+        if (Date.now() - animal.startedAt < effectiveMs(def.produceMs, s.animalSpeedLevel[animal.typeId] ?? 0)) {
           set({ toast: 'Not ready yet' })
           return
         }
@@ -2777,13 +3097,21 @@ export const useGame = create<GameState>()(
         inventory: s.inventory,
         materials: s.materials,
         plots: s.plots,
+        treeSlots: s.treeSlots,
+        saplings: s.saplings,
         selectedCrop: s.selectedCrop,
+        selectedTree: s.selectedTree,
+        shopPane: s.shopPane,
+        farmPane: s.farmPane,
         craftQueue: s.craftQueue,
         activeOrders: s.activeOrders,
         animals: s.animals,
         unlocked: s.unlocked,
         ownedBuildings: s.ownedBuildings,
         machineQueueBonus: s.machineQueueBonus,
+        machineSpeedLevel: s.machineSpeedLevel,
+        animalSpeedLevel: s.animalSpeedLevel,
+        farmSpeedLevel: s.farmSpeedLevel,
         completedMissions: s.completedMissions,
         activeMissionId: s.activeMissionId,
         missionProgress: s.missionProgress,
@@ -2831,33 +3159,72 @@ export function idleRecruits(
   return recruited.filter((n) => !busy.has(n.id))
 }
 
-export function plotProgress(plot: PlotState, now = Date.now()): number {
+export function plotProgress(
+  plot: PlotState,
+  now = Date.now(),
+  farmSpeedLevel = 0,
+): number {
   if (!plot.cropId || plot.plantedAt == null) return 0
   const crop = CROPS[plot.cropId]
   if (!crop) return 0
-  return Math.min(1, (now - plot.plantedAt) / crop.growMs)
+  const growMs = effectiveMs(crop.growMs, farmSpeedLevel)
+  return Math.min(1, (now - plot.plantedAt) / growMs)
 }
 
-export function isReady(plot: PlotState, now = Date.now()): boolean {
-  return plotProgress(plot, now) >= 1
+export function isReady(
+  plot: PlotState,
+  now = Date.now(),
+  farmSpeedLevel = 0,
+): boolean {
+  return plotProgress(plot, now, farmSpeedLevel) >= 1
 }
 
 export function animalProgress(
   animal: AnimalInstance,
   now = Date.now(),
+  speedLevel = 0,
 ): number {
   if (animal.startedAt == null) return 0
   const def = ANIMALS[animal.typeId]
   if (!def) return 0
-  return Math.min(1, (now - animal.startedAt) / def.produceMs)
+  const produceMs = effectiveMs(def.produceMs, speedLevel)
+  return Math.min(1, (now - animal.startedAt) / produceMs)
 }
 
-export function animalReady(animal: AnimalInstance, now = Date.now()): boolean {
-  return animalProgress(animal, now) >= 1
+export function animalReady(
+  animal: AnimalInstance,
+  now = Date.now(),
+  speedLevel = 0,
+): boolean {
+  return animalProgress(animal, now, speedLevel) >= 1
 }
 
 export function plotUnlockCost(plotCount: number): number {
   return PLOT_UNLOCK_BASE * plotCount
+}
+
+export function treeSlotUnlockCost(slotCount: number): number {
+  return TREE_SLOT_UNLOCK_BASE * slotCount
+}
+
+export function treeProgress(
+  slot: TreeSlotState,
+  now = Date.now(),
+  farmSpeedLevel = 0,
+): number {
+  if (!slot.treeId || slot.plantedAt == null) return 0
+  const tree = TREES[slot.treeId]
+  if (!tree) return 0
+  const growMs = effectiveMs(tree.growMs, farmSpeedLevel)
+  return Math.min(1, (now - slot.plantedAt) / growMs)
+}
+
+export function treeReady(
+  slot: TreeSlotState,
+  now = Date.now(),
+  farmSpeedLevel = 0,
+): boolean {
+  return treeProgress(slot, now, farmSpeedLevel) >= 1
 }
 
 export function missionGoalProgress(
@@ -2868,4 +3235,4 @@ export function missionGoalProgress(
   return progress[`${parentId}:${goalId}`] ?? 0
 }
 
-export { MAX_PLOTS, EVENTS, BUILDINGS, TAVERN_UNLOCK_LEVEL, ORDERS_UNLOCK_LEVEL, MARKET_UNLOCK_LEVEL, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS }
+export { MAX_PLOTS, MAX_TREE_SLOTS, EVENTS, BUILDINGS, TAVERN_UNLOCK_LEVEL, ORDERS_UNLOCK_LEVEL, MARKET_UNLOCK_LEVEL, BASE_MACHINE_QUEUE, MAX_QUEUE_BONUS }

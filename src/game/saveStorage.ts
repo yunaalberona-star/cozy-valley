@@ -2,7 +2,7 @@
 export const SAVE_STORAGE_KEY = 'cozy-valley-save'
 
 /** Bump when save shape changes; run migrations, do not rename SAVE_STORAGE_KEY. */
-export const SAVE_VERSION = 15
+export const SAVE_VERSION = 17
 
 const LEGACY_SAVE_KEYS = [
   'cozy-valley-save-v7',
@@ -51,5 +51,9 @@ export function mergePersistedSlice(
     machineQueueBonus: { ...((p.machineQueueBonus as object) ?? {}) },
     missionProgress: { ...((p.missionProgress as object) ?? {}) },
     eventProgress: { ...((p.eventProgress as object) ?? {}) },
+    saplings:
+      p.saplings != null && typeof p.saplings === 'object'
+        ? { ...(p.saplings as object) }
+        : { ...((defaults.saplings as object) ?? {}) },
   }
 }
