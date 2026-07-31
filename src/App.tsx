@@ -44,6 +44,24 @@ import {
   eventStageParentId,
   isMissionLevelGated,
 } from './game/data/missions'
+import {
+  DAILY_ALL_BONUS,
+  DAILY_GOALS_PARENT_ID,
+  WEEKLY_ALL_BONUS,
+  WEEKLY_GOALS_PARENT_ID,
+  allSlotsClaimed,
+  msUntilDailyReset,
+  msUntilWeeklyReset,
+  slotComplete,
+  WEEKLY_RESET_LABEL,
+  type GoalBonus,
+  type ScheduledGoalSlot,
+} from './game/data/scheduledGoals'
+import {
+  RANKING_TIERS,
+  rankingTierLabel,
+  type GoalPeriodKind,
+} from './game/data/rankingTiers'
 import { buildingUnlockLevel } from './game/data/levelUnlocks'
 import {
   GATHER_SITE_MAX_SLOTS,
@@ -559,18 +577,279 @@ function EventsPane() {
   )
 }
 
+function ScheduledGoalCard({
+  slot,
+  parentId,
+  progress,
+  onClaim,
+}: {
+  slot: ScheduledGoalSlot
+  parentId: string
+  progress: Record<string, number>
+  onClaim: () => void
+}) {
+  const navigateToMissionGoal = useGame((s) => s.navigateToMissionGoal)
+  const cur = missionGoalProgress(progress, parentId, slot.slotId)
+  const done = cur >= slot.amount
+  const goal = {
+    id: slot.slotId,
+    kind: slot.kind,
+    target: slot.target,
+    amount: slot.amount,
+    label: slot.label,
+  }
+
+  return (
+    <div className={`recipe-card scheduled-goal${slot.claimed ? ' claimed' : ''}${done && !slot.claimed ? ' ready' : ''}`}>
+      <div className="recipe-top">
+        <div>
+          <strong>{slot.label}</strong>
+          <p className="muted small">
+            {slot.claimed ? (
+              'Claimed ✓'
+            ) : (
+              <>
+                Progress {Math.min(cur, slot.amount)}/{slot.amount}
+              </>
+            )}
+          </p>
+          <p className="unlock-line">
+            🪙 {slot.rewardCoins} · ⭐ {slot.rewardXp} XP
+          </p>
+        </div>
+      </div>
+      {slot.claimed ? null : done ? (
+        <button type="button" className="btn full" onClick={onClaim}>
+          Claim reward
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="btn secondary full"
+          onClick={() => navigateToMissionGoal(goal)}
+        >
+          Go do it
+        </button>
+      )}
+    </div>
+  )
+}
+
+function RankingTierTable({ period }: { period: GoalPeriodKind }) {
+  return (
+    <ul className="ranking-tier-list muted small">
+      {RANKING_TIERS.map((tier) => (
+        <li key={tier.label}>
+          <strong>{tier.label}</strong>
+          <span>
+            🏆 {period === 'daily' ? tier.pointsDaily : tier.pointsWeekly} pts
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function ScheduledGoalsSection({
+  title,
+  period,
+  resetInMs,
+  resetNote,
+  parentId,
+  goals,
+  progress,
+  bonusClaimed,
+  bonus,
+  rankingRank,
+  bonusLoading,
+  onClaimGoal,
+  onClaimBonus,
+}: {
+  title: string
+  period: GoalPeriodKind
+  resetInMs: number
+  resetNote?: string
+  parentId: string
+  goals: ScheduledGoalSlot[]
+  progress: Record<string, number>
+  bonusClaimed: boolean
+  bonus: GoalBonus
+  rankingRank: number | null
+  bonusLoading: boolean
+  onClaimGoal: (slotId: string) => void
+  onClaimBonus: () => void
+}) {
+  const allClaimed = allSlotsClaimed(goals)
+  const allComplete = goals.every((slot) =>
+    slot.claimed || slotComplete(slot, progress, parentId),
+  )
+
+  return (
+    <section className="scheduled-goals-section">
+      <div className="scheduled-goals-head">
+        <h3>{title}</h3>
+        <p className="muted small">
+          Resets in {formatLeft(resetInMs)}
+          {resetNote ? ` · ${resetNote}` : ''}
+        </p>
+      </div>
+      <div className="card-list">
+        {goals.map((slot) => (
+          <ScheduledGoalCard
+            key={slot.slotId}
+            slot={slot}
+            parentId={parentId}
+            progress={progress}
+            onClaim={() => onClaimGoal(slot.slotId)}
+          />
+        ))}
+      </div>
+      <div className="recipe-card highlight scheduled-bonus">
+        <div className="recipe-top">
+          <div>
+            <strong>All-goals bonus</strong>
+            <p className="muted small">
+              Faster finishers earn more ranking points. Set your farmer name
+              (Market chat) to register on the leaderboard.
+            </p>
+            <p className="unlock-line">
+              🪙 {bonus.rewardCoins} · ⭐ {bonus.rewardXp} XP
+            </p>
+            <RankingTierTable period={period} />
+            {bonusClaimed && rankingRank != null && (
+              <p className="muted small">
+                Your finish: #{rankingRank} ({rankingTierLabel(rankingRank)})
+              </p>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="btn full"
+          disabled={bonusClaimed || !allClaimed || bonusLoading}
+          onClick={onClaimBonus}
+        >
+          {bonusLoading
+            ? 'Submitting rank…'
+            : bonusClaimed
+              ? 'Bonus claimed ✓'
+              : allClaimed
+                ? 'Claim bonus & rank'
+                : allComplete
+                  ? 'Claim individual rewards first'
+                  : 'Complete all goals'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function ScheduledGoalsPane() {
+  const now = useNow(1000)
+  const [dailyBonusLoading, setDailyBonusLoading] = useState(false)
+  const [weeklyBonusLoading, setWeeklyBonusLoading] = useState(false)
+  const dailyGoals = useGame((s) => s.dailyGoals)
+  const dailyGoalProgress = useGame((s) => s.dailyGoalProgress)
+  const dailyBonusClaimed = useGame((s) => s.dailyBonusClaimed)
+  const dailyRankingRank = useGame((s) => s.dailyRankingRank)
+  const weeklyGoals = useGame((s) => s.weeklyGoals)
+  const weeklyGoalProgress = useGame((s) => s.weeklyGoalProgress)
+  const weeklyBonusClaimed = useGame((s) => s.weeklyBonusClaimed)
+  const weeklyRankingRank = useGame((s) => s.weeklyRankingRank)
+  const rankingPoints = useGame((s) => s.rankingPoints)
+  const rankingWeekPoints = useGame((s) => s.rankingWeekPoints)
+  const claimScheduledGoal = useGame((s) => s.claimScheduledGoal)
+  const claimScheduledBonus = useGame((s) => s.claimScheduledBonus)
+
+  const claimDailyBonus = async () => {
+    setDailyBonusLoading(true)
+    try {
+      await claimScheduledBonus('daily')
+    } finally {
+      setDailyBonusLoading(false)
+    }
+  }
+
+  const claimWeeklyBonus = async () => {
+    setWeeklyBonusLoading(true)
+    try {
+      await claimScheduledBonus('weekly')
+    } finally {
+      setWeeklyBonusLoading(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="recipe-card highlight ranking-summary">
+        <div className="recipe-top">
+          <div>
+            <strong>Ranking points</strong>
+            <p className="muted small">
+              Claim the all-goals bonus to register your finish time. Earlier
+              finishers earn more points (1st, 2nd–3rd, 4th–10th, 11th–50th,
+              then the same base for everyone else).
+            </p>
+            <p className="unlock-line">
+              This week: 🏆 {rankingWeekPoints} · All-time: 🏆 {rankingPoints}
+            </p>
+          </div>
+        </div>
+      </div>
+      <p className="muted pad small">
+        Daily and weekly tasks refresh on a timer. Progress counts from actions
+        you take in the valley — same as story missions.
+      </p>
+      <ScheduledGoalsSection
+        title="Daily goals"
+        period="daily"
+        resetInMs={msUntilDailyReset(now)}
+        parentId={DAILY_GOALS_PARENT_ID}
+        goals={dailyGoals}
+        progress={dailyGoalProgress}
+        bonusClaimed={dailyBonusClaimed}
+        bonus={DAILY_ALL_BONUS}
+        rankingRank={dailyRankingRank}
+        bonusLoading={dailyBonusLoading}
+        onClaimGoal={(slotId) => claimScheduledGoal('daily', slotId)}
+        onClaimBonus={claimDailyBonus}
+      />
+      <ScheduledGoalsSection
+        title="Weekly goals"
+        period="weekly"
+        resetInMs={msUntilWeeklyReset(now)}
+        resetNote={WEEKLY_RESET_LABEL}
+        parentId={WEEKLY_GOALS_PARENT_ID}
+        goals={weeklyGoals}
+        progress={weeklyGoalProgress}
+        bonusClaimed={weeklyBonusClaimed}
+        bonus={WEEKLY_ALL_BONUS}
+        rankingRank={weeklyRankingRank}
+        bonusLoading={weeklyBonusLoading}
+        onClaimGoal={(slotId) => claimScheduledGoal('weekly', slotId)}
+        onClaimBonus={claimWeeklyBonus}
+      />
+    </>
+  )
+}
+
 function MissionsView() {
-  const [pane, setPane] = useState<'story' | 'events'>('story')
+  const [pane, setPane] = useState<'story' | 'events' | 'goals'>('story')
   const activeEventId = useGame((s) => s.activeEventId)
+  const refreshScheduledGoals = useGame((s) => s.refreshScheduledGoals)
+
+  useEffect(() => {
+    refreshScheduledGoals()
+  }, [refreshScheduledGoals])
 
   return (
     <div className="panel">
       <div className="panel-head">
         <h2>Missions</h2>
-        <p>Story chapters & limited-time events — machines unlock as you level.</p>
+        <p>Story chapters, daily goals, and limited-time events.</p>
       </div>
 
-      <div className="pane-tabs pane-tabs-2" role="tablist" aria-label="Mission areas">
+      <div className="pane-tabs pane-tabs-3" role="tablist" aria-label="Mission areas">
         <button
           type="button"
           role="tab"
@@ -579,6 +858,15 @@ function MissionsView() {
           onClick={() => setPane('story')}
         >
           📜 Story
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'goals'}
+          className={pane === 'goals' ? 'active' : ''}
+          onClick={() => setPane('goals')}
+        >
+          🎯 Goals
         </button>
         <button
           type="button"
@@ -592,6 +880,7 @@ function MissionsView() {
       </div>
 
       {pane === 'story' && <StoryMissionsPane />}
+      {pane === 'goals' && <ScheduledGoalsPane />}
       {pane === 'events' && <EventsPane />}
     </div>
   )

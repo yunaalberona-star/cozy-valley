@@ -58,6 +58,27 @@ import {
   isBuildingRequiredByMission,
   isRecipeRequiredByMission,
 } from './data/missionCraftUnlock'
+import {
+  DAILY_ALL_BONUS,
+  DAILY_GOALS_PARENT_ID,
+  WEEKLY_ALL_BONUS,
+  WEEKLY_GOALS_PARENT_ID,
+  WEEKLY_GOAL_SLOTS,
+  allSlotsClaimed,
+  periodDayKey,
+  periodWeekKey,
+  rollDailyGoals,
+  rollWeeklyGoals,
+  slotComplete,
+  slotsToMissionGoals,
+  type ScheduledGoalSlot,
+} from './data/scheduledGoals'
+import {
+  FALLBACK_RANK,
+  rankingPointsForRank,
+  rankingTierLabel,
+} from './data/rankingTiers'
+import { submitGoalRanking } from './rankingClient'
 import { LEGACY_MISSION_ID_MAP } from './data/missionChain'
 import { buildingUnlockLevel, unlocksCrossingLevels, unlocksForLevel } from './data/levelUnlocks'
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
@@ -470,6 +491,88 @@ function levelUnlockSubtitle(levelIds: UnlockId[], newLevel: number): string {
 
 function activeMissionDef(activeMissionId: string | null): MissionDef | null {
   return activeMissionId ? (MISSION_BY_ID[activeMissionId] ?? null) : null
+}
+
+function ensureScheduledGoals(
+  playerLevel: number,
+  slice: Pick<
+    GameState,
+    | 'dailyGoalsPeriodKey'
+    | 'dailyGoals'
+    | 'dailyGoalProgress'
+    | 'dailyBonusClaimed'
+    | 'weeklyGoalsPeriodKey'
+    | 'weeklyGoals'
+    | 'weeklyGoalProgress'
+    | 'weeklyBonusClaimed'
+    | 'rankingWeekKey'
+    | 'rankingWeekPoints'
+    | 'dailyRankingRank'
+    | 'weeklyRankingRank'
+  >,
+): Partial<
+  Pick<
+    GameState,
+    | 'dailyGoalsPeriodKey'
+    | 'dailyGoals'
+    | 'dailyGoalProgress'
+    | 'dailyBonusClaimed'
+    | 'dailyRankingRank'
+    | 'weeklyGoalsPeriodKey'
+    | 'weeklyGoals'
+    | 'weeklyGoalProgress'
+    | 'weeklyBonusClaimed'
+    | 'weeklyRankingRank'
+    | 'rankingWeekKey'
+    | 'rankingWeekPoints'
+  >
+> {
+  const dayKey = periodDayKey()
+  const weekKey = periodWeekKey()
+  const patch: Partial<
+    Pick<
+      GameState,
+      | 'dailyGoalsPeriodKey'
+      | 'dailyGoals'
+      | 'dailyGoalProgress'
+      | 'dailyBonusClaimed'
+      | 'dailyRankingRank'
+      | 'weeklyGoalsPeriodKey'
+      | 'weeklyGoals'
+      | 'weeklyGoalProgress'
+      | 'weeklyBonusClaimed'
+      | 'weeklyRankingRank'
+      | 'rankingWeekKey'
+      | 'rankingWeekPoints'
+    >
+  > = {}
+
+  if (slice.dailyGoalsPeriodKey !== dayKey || slice.dailyGoals.length === 0) {
+    patch.dailyGoalsPeriodKey = dayKey
+    patch.dailyGoals = rollDailyGoals(playerLevel, dayKey)
+    patch.dailyGoalProgress = {}
+    patch.dailyBonusClaimed = false
+    patch.dailyRankingRank = null
+  }
+
+  if (
+    slice.weeklyGoalsPeriodKey !== weekKey ||
+    slice.weeklyGoals.length === 0 ||
+    slice.weeklyGoals.length !== WEEKLY_GOAL_SLOTS
+  ) {
+    patch.weeklyGoalsPeriodKey = weekKey
+    patch.weeklyGoals = rollWeeklyGoals(playerLevel, weekKey)
+    patch.weeklyGoalProgress = {}
+    patch.weeklyBonusClaimed = false
+    patch.weeklyRankingRank = null
+  }
+
+  if (slice.rankingWeekKey !== weekKey) {
+    patch.rankingWeekKey = weekKey
+    patch.rankingWeekPoints = 0
+  }
+
+  return patch
 }
 
 function syncLevelUnlocks(xp: number, unlocked: UnlockId[]): UnlockId[] {
@@ -998,6 +1101,40 @@ function migrateSaveState(
       state.farmSpeedLevel = 0
     }
   }
+  if (version < 18) {
+    const level =
+      typeof state.xp === 'number'
+        ? levelFromXp(state.xp as number)
+        : 1
+    const dayKey = periodDayKey()
+    const weekKey = periodWeekKey()
+    state.dailyGoalsPeriodKey = dayKey
+    state.dailyGoals = rollDailyGoals(level, dayKey)
+    state.dailyGoalProgress = {}
+    state.dailyBonusClaimed = false
+    state.weeklyGoalsPeriodKey = weekKey
+    state.weeklyGoals = rollWeeklyGoals(level, weekKey)
+    state.weeklyGoalProgress = {}
+    state.weeklyBonusClaimed = false
+  }
+  if (version < 19) {
+    const level =
+      typeof state.xp === 'number'
+        ? levelFromXp(state.xp as number)
+        : 1
+    const weekKey = periodWeekKey()
+    state.weeklyGoalsPeriodKey = weekKey
+    state.weeklyGoals = rollWeeklyGoals(level, weekKey)
+    state.weeklyGoalProgress = {}
+    state.weeklyBonusClaimed = false
+    state.rankingPoints = 0
+    state.rankingWeekKey = weekKey
+    state.rankingWeekPoints = 0
+  }
+  if (version < 20) {
+    state.dailyRankingRank = null
+    state.weeklyRankingRank = null
+  }
   return state
 }
 
@@ -1091,6 +1228,19 @@ export interface GameState {
   eventStageIndex: number
   eventProgress: Record<string, number>
   completedEvents: string[]
+  dailyGoalsPeriodKey: string
+  dailyGoals: ScheduledGoalSlot[]
+  dailyGoalProgress: Record<string, number>
+  dailyBonusClaimed: boolean
+  weeklyGoalsPeriodKey: string
+  weeklyGoals: ScheduledGoalSlot[]
+  weeklyGoalProgress: Record<string, number>
+  weeklyBonusClaimed: boolean
+  rankingPoints: number
+  rankingWeekKey: string
+  rankingWeekPoints: number
+  dailyRankingRank: number | null
+  weeklyRankingRank: number | null
   selectedBuilding: BuildingId | null
   selectedAnimalBuilding: AnimalBuildingId | null
   selectedGearBuilding: GearBuildingId | null
@@ -1189,6 +1339,9 @@ export interface GameState {
   claimMission: () => void
   startEvent: (eventId: string) => void
   claimEvent: () => void
+  claimScheduledGoal: (period: 'daily' | 'weekly', slotId: string) => void
+  claimScheduledBonus: (period: 'daily' | 'weekly') => Promise<void>
+  refreshScheduledGoals: () => void
 
   recruitNpc: (npcId: string) => void
   startAdventure: (adventureId: string, npcInstanceIds: string[]) => void
@@ -1244,6 +1397,19 @@ const initial = () => {
     eventStageIndex: 0,
     eventProgress: {} as Record<string, number>,
     completedEvents: [] as string[],
+    dailyGoalsPeriodKey: periodDayKey(),
+    dailyGoals: rollDailyGoals(1, periodDayKey()),
+    dailyGoalProgress: {} as Record<string, number>,
+    dailyBonusClaimed: false,
+    weeklyGoalsPeriodKey: periodWeekKey(),
+    weeklyGoals: rollWeeklyGoals(1, periodWeekKey()),
+    weeklyGoalProgress: {} as Record<string, number>,
+    weeklyBonusClaimed: false,
+    rankingPoints: 0,
+    rankingWeekKey: periodWeekKey(),
+    rankingWeekPoints: 0,
+    dailyRankingRank: null as number | null,
+    weeklyRankingRank: null as number | null,
     selectedBuilding: null as BuildingId | null,
     selectedAnimalBuilding: null as AnimalBuildingId | null,
     selectedGearBuilding: null as GearBuildingId | null,
@@ -1727,23 +1893,28 @@ export const useGame = create<GameState>()(
 
       track: (kind, target, amount = 1) => {
         const s = get()
-        let missionProgress = s.missionProgress
-        let eventProgress = s.eventProgress
+        const playerLevel = levelFromXp(s.xp)
+        const goalRefresh = ensureScheduledGoals(playerLevel, s)
+        const base = goalRefresh.dailyGoals ? { ...s, ...goalRefresh } : s
+
+        let missionProgress = base.missionProgress
+        let eventProgress = base.eventProgress
+        let dailyGoalProgress = base.dailyGoalProgress
+        let weeklyGoalProgress = base.weeklyGoalProgress
         const value =
           kind === 'own_coins'
-            ? s.coins
+            ? base.coins
             : kind === 'own_material' && target
-              ? (s.materials[target as MaterialId] ?? 0)
+              ? (base.materials[target as MaterialId] ?? 0)
               : amount
 
-        if (s.activeMissionId) {
-          const mission = MISSION_BY_ID[s.activeMissionId]
-          const playerLevel = levelFromXp(s.xp)
+        if (base.activeMissionId) {
+          const mission = MISSION_BY_ID[base.activeMissionId]
           if (mission && !isMissionLevelGated(mission, playerLevel)) {
             missionProgress = bumpGoals(
               missionProgress,
               mission.goals,
-              s.activeMissionId,
+              base.activeMissionId,
               kind,
               target,
               value,
@@ -1751,12 +1922,12 @@ export const useGame = create<GameState>()(
           }
         }
 
-        if (s.activeEventId && s.eventEndsAt && Date.now() < s.eventEndsAt) {
-          const event = EVENT_BY_ID[s.activeEventId]
+        if (base.activeEventId && base.eventEndsAt && Date.now() < base.eventEndsAt) {
+          const event = EVENT_BY_ID[base.activeEventId]
           if (event) {
-            const stage = event.stages[s.eventStageIndex]
+            const stage = event.stages[base.eventStageIndex]
             if (stage) {
-              const parentId = eventStageParentId(s.activeEventId, s.eventStageIndex)
+              const parentId = eventStageParentId(base.activeEventId, base.eventStageIndex)
               eventProgress = bumpGoals(
                 eventProgress,
                 stage.goals,
@@ -1769,16 +1940,46 @@ export const useGame = create<GameState>()(
           }
         }
 
-        const missionPatch = resolveMissionProgress(s, missionProgress)
+        const dailyGoals = slotsToMissionGoals(base.dailyGoals)
+        if (dailyGoals.length > 0) {
+          dailyGoalProgress = bumpGoals(
+            dailyGoalProgress,
+            dailyGoals,
+            DAILY_GOALS_PARENT_ID,
+            kind,
+            target,
+            value,
+          )
+        }
+
+        const weeklyGoals = slotsToMissionGoals(base.weeklyGoals)
+        if (weeklyGoals.length > 0) {
+          weeklyGoalProgress = bumpGoals(
+            weeklyGoalProgress,
+            weeklyGoals,
+            WEEKLY_GOALS_PARENT_ID,
+            kind,
+            target,
+            value,
+          )
+        }
+
+        const missionPatch = resolveMissionProgress(base, missionProgress)
 
         if (
           missionPatch.missionProgress !== s.missionProgress ||
           eventProgress !== s.eventProgress ||
-          missionPatch.popupQueue !== s.popupQueue
+          dailyGoalProgress !== s.dailyGoalProgress ||
+          weeklyGoalProgress !== s.weeklyGoalProgress ||
+          missionPatch.popupQueue !== s.popupQueue ||
+          Object.keys(goalRefresh).length > 0
         ) {
           set({
+            ...goalRefresh,
             missionProgress: missionPatch.missionProgress,
             eventProgress,
+            dailyGoalProgress,
+            weeklyGoalProgress,
             popupQueue: missionPatch.popupQueue,
           })
         }
@@ -2862,6 +3063,153 @@ export const useGame = create<GameState>()(
         get().track('own_coins', undefined, get().coins)
       },
 
+      refreshScheduledGoals: () => {
+        const s = get()
+        const patch = ensureScheduledGoals(levelFromXp(s.xp), s)
+        if (Object.keys(patch).length > 0) set(patch)
+      },
+
+      claimScheduledGoal: (period, slotId) => {
+        const s = get()
+        const playerLevel = levelFromXp(s.xp)
+        const goalRefresh = ensureScheduledGoals(playerLevel, s)
+        const base = { ...s, ...goalRefresh }
+
+        const slots = period === 'daily' ? base.dailyGoals : base.weeklyGoals
+        const progress =
+          period === 'daily' ? base.dailyGoalProgress : base.weeklyGoalProgress
+        const parentId =
+          period === 'daily' ? DAILY_GOALS_PARENT_ID : WEEKLY_GOALS_PARENT_ID
+        const slot = slots.find((g) => g.slotId === slotId)
+        if (!slot) return
+        if (slot.claimed) {
+          set({ toast: 'Reward already claimed' })
+          return
+        }
+        if (!slotComplete(slot, progress, parentId)) {
+          set({ toast: 'Goal not finished yet' })
+          return
+        }
+
+        const updatedSlots = slots.map((g) =>
+          g.slotId === slotId ? { ...g, claimed: true } : g,
+        )
+        const xpResult = applyXpGain(
+          base.xp,
+          slot.rewardXp,
+          base.popupQueue,
+          base.unlocked,
+          base.activeOrders,
+          base.seeds,
+        )
+        const guides = unlockGuidePatch(
+          base,
+          xpResult.unlocked,
+          levelFromXp(xpResult.xp),
+        )
+        set({
+          ...goalRefresh,
+          coins: base.coins + slot.rewardCoins,
+          xp: xpResult.xp,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
+          activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
+          popupQueue: xpResult.popupQueue,
+          ...(period === 'daily'
+            ? { dailyGoals: updatedSlots }
+            : { weeklyGoals: updatedSlots }),
+          toast: `Goal complete! +🪙 ${slot.rewardCoins} · +⭐ ${slot.rewardXp} XP`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
+      claimScheduledBonus: async (period) => {
+        const s = get()
+        const playerLevel = levelFromXp(s.xp)
+        const goalRefresh = ensureScheduledGoals(playerLevel, s)
+        const base = { ...s, ...goalRefresh }
+
+        const slots = period === 'daily' ? base.dailyGoals : base.weeklyGoals
+        const bonusClaimed =
+          period === 'daily' ? base.dailyBonusClaimed : base.weeklyBonusClaimed
+        const bonus = period === 'daily' ? DAILY_ALL_BONUS : WEEKLY_ALL_BONUS
+        const periodKey =
+          period === 'daily'
+            ? base.dailyGoalsPeriodKey
+            : base.weeklyGoalsPeriodKey
+
+        if (bonusClaimed) {
+          set({ toast: 'Bonus already claimed' })
+          return
+        }
+        if (!allSlotsClaimed(slots)) {
+          set({ toast: 'Claim each goal reward first' })
+          return
+        }
+
+        let rank = FALLBACK_RANK
+        let rankingNote = 'offline base tier'
+        const playerName = getPlayerName()
+        if (isSupabaseConfigured() && playerName) {
+          try {
+            const result = await submitGoalRanking(
+              playerName,
+              period,
+              periodKey,
+            )
+            rank = result.rank
+            rankingNote = `#${result.rank} of ${result.total}`
+          } catch {
+            rankingNote = 'server unavailable — base tier'
+          }
+        } else if (!playerName) {
+          rankingNote = 'set farmer name for ranked bonus'
+        }
+
+        const rankingPts = rankingPointsForRank(period, rank)
+        const tierLabel = rankingTierLabel(rank)
+
+        const xpResult = applyXpGain(
+          base.xp,
+          bonus.rewardXp,
+          base.popupQueue,
+          base.unlocked,
+          base.activeOrders,
+          base.seeds,
+        )
+        const guides = unlockGuidePatch(
+          base,
+          xpResult.unlocked,
+          levelFromXp(xpResult.xp),
+        )
+        set({
+          ...goalRefresh,
+          coins: base.coins + bonus.rewardCoins,
+          xp: xpResult.xp,
+          rankingPoints: base.rankingPoints + rankingPts,
+          rankingWeekPoints: base.rankingWeekPoints + rankingPts,
+          seeds: xpResult.seeds,
+          unlocked: xpResult.unlocked,
+          activeOrders: xpResult.activeOrders,
+          guideTabPulses: guides.guideTabPulses,
+          guideItemHighlights: guides.guideItemHighlights,
+          popupQueue: xpResult.popupQueue,
+          ...(period === 'daily'
+            ? {
+                dailyBonusClaimed: true,
+                dailyRankingRank: rank,
+              }
+            : {
+                weeklyBonusClaimed: true,
+                weeklyRankingRank: rank,
+              }),
+          toast: `${period === 'daily' ? 'Daily' : 'Weekly'} bonus! ${tierLabel} (${rankingNote}) · +🪙 ${bonus.rewardCoins} · +⭐ ${bonus.rewardXp} XP · +🏆 ${rankingPts} pts`,
+        })
+        get().track('own_coins', undefined, get().coins)
+      },
+
       recruitNpc: (npcId) => {
         const def = NPCS[npcId]
         if (!def) return
@@ -3197,6 +3545,7 @@ export const useGame = create<GameState>()(
         if (error || !state) return
         state.unlocked = syncLevelUnlocks(state.xp, state.unlocked ?? [])
         const level = levelFromXp(state.xp)
+        Object.assign(state, ensureScheduledGoals(level, state as GameState))
         if (!state.activeMissionId) {
           const fix = ensureActiveMission(
             state.completedMissions ?? [],
@@ -3266,6 +3615,19 @@ export const useGame = create<GameState>()(
         eventStageIndex: s.eventStageIndex,
         eventProgress: s.eventProgress,
         completedEvents: s.completedEvents,
+        dailyGoalsPeriodKey: s.dailyGoalsPeriodKey,
+        dailyGoals: s.dailyGoals,
+        dailyGoalProgress: s.dailyGoalProgress,
+        dailyBonusClaimed: s.dailyBonusClaimed,
+        weeklyGoalsPeriodKey: s.weeklyGoalsPeriodKey,
+        weeklyGoals: s.weeklyGoals,
+        weeklyGoalProgress: s.weeklyGoalProgress,
+        weeklyBonusClaimed: s.weeklyBonusClaimed,
+        rankingPoints: s.rankingPoints,
+        rankingWeekKey: s.rankingWeekKey,
+        rankingWeekPoints: s.rankingWeekPoints,
+        dailyRankingRank: s.dailyRankingRank,
+        weeklyRankingRank: s.weeklyRankingRank,
         selectedBuilding: s.selectedBuilding,
         selectedAnimalBuilding: s.selectedAnimalBuilding,
         selectedGearBuilding: s.selectedGearBuilding,
