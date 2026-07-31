@@ -26,6 +26,9 @@ export const BUILDING_LEVEL_UNLOCKS: { level: number; ids: UnlockId[] }[] = [
   { level: 21, ids: ['pig_sty', 'boar_pen'] },
   { level: 22, ids: ['winery'] },
   { level: 23, ids: ['maple_sugar_shack'] },
+  { level: 25, ids: ['orchard_bakery'] },
+  { level: 27, ids: ['preserves_cellar'] },
+  { level: 29, ids: ['cider_house'] },
   { level: 24, ids: ['candy_machine'] },
   { level: 26, ids: ['cake_machine'] },
 ]

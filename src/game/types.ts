@@ -91,6 +91,14 @@ export type CraftedId =
   | 'lemonade'
   | 'maple_syrup'
   | 'cherry_pie'
+  | 'peach_cobbler'
+  | 'apple_turnover'
+  | 'maple_donut'
+  | 'apple_butter'
+  | 'peach_jam'
+  | 'cherry_preserves'
+  | 'mulled_cider'
+  | 'honey_cider'
 
 export type MaterialId =
   | 'iron_ore'
@@ -156,6 +164,9 @@ export type BuildingId =
   | 'tannery'
   | 'orchard_press'
   | 'maple_sugar_shack'
+  | 'orchard_bakery'
+  | 'preserves_cellar'
+  | 'cider_house'
 
 export type AnimalTypeId =
   | 'chicken'
@@ -225,6 +236,11 @@ export type MissionGoalKind =
   | 'buy_animal'
   | 'fulfill_order'
   | 'own_coins'
+  | 'recruit'
+  | 'complete_adventure'
+  | 'craft_gear'
+  | 'gather_material'
+  | 'own_material'
 
 export type PopupKind = 'unlock' | 'level_up' | 'mission_claim'
 
@@ -317,8 +333,8 @@ export interface OrderDef {
 export interface MissionGoal {
   id: string
   kind: MissionGoalKind
-  /** Item or animal type depending on kind */
-  target?: ItemId | AnimalTypeId
+  /** Item, animal, material, adventure id, blueprint id, or npc id depending on kind */
+  target?: string
   amount: number
   label: string
 }

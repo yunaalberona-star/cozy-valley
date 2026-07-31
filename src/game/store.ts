@@ -577,11 +577,26 @@ function queueMissionClaimIfReady(
 
 type MissionProgressSlice = Pick<
   GameState,
-  'activeMissionId' | 'missionProgress' | 'popupQueue' | 'inventory' | 'coins' | 'animals'
+  | 'activeMissionId'
+  | 'missionProgress'
+  | 'popupQueue'
+  | 'inventory'
+  | 'coins'
+  | 'animals'
+  | 'materials'
+  | 'recruitedNpcs'
 >
 
 function computeMissionProgressFromState(
-  s: Pick<GameState, 'inventory' | 'coins' | 'animals' | 'missionProgress'>,
+  s: Pick<
+    GameState,
+    | 'inventory'
+    | 'coins'
+    | 'animals'
+    | 'materials'
+    | 'recruitedNpcs'
+    | 'missionProgress'
+  >,
   missionId: string,
 ): Record<string, number> {
   const mission = MISSION_BY_ID[missionId]
@@ -593,6 +608,9 @@ function computeMissionProgressFromState(
       case 'harvest':
       case 'craft':
       case 'collect_animal':
+      case 'complete_adventure':
+      case 'craft_gear':
+      case 'gather_material':
         // Lifetime progress from player actions only — not bag inventory (market buys don't count).
         next[key] = Math.min(g.amount, next[key] ?? 0)
         break
@@ -604,8 +622,24 @@ function computeMissionProgressFromState(
           )
         }
         break
+      case 'recruit':
+        next[key] = Math.min(
+          g.amount,
+          g.target
+            ? s.recruitedNpcs.filter((n) => n.npcId === g.target).length
+            : s.recruitedNpcs.length,
+        )
+        break
       case 'own_coins':
         next[key] = Math.min(g.amount, s.coins)
+        break
+      case 'own_material':
+        if (g.target) {
+          next[key] = Math.min(
+            g.amount,
+            s.materials[g.target as MaterialId] ?? 0,
+          )
+        }
         break
       case 'fulfill_order':
         next[key] = Math.min(g.amount, next[key] ?? 0)
@@ -1239,7 +1273,7 @@ function bumpGoals(
     const key = goalKey(parentId, g.id)
     const cur = next[key] ?? 0
     if (cur >= g.amount) continue
-    if (kind === 'own_coins') {
+    if (kind === 'own_coins' || kind === 'own_material') {
       next[key] = Math.min(g.amount, amount)
     } else {
       next[key] = Math.min(g.amount, cur + amount)
@@ -1594,6 +1628,57 @@ export const useGame = create<GameState>()(
           case 'own_coins':
             set({ toast: 'Earn coins from harvests, crafts, and orders' })
             return
+          case 'recruit':
+            if (s.isTavernOpen()) {
+              set({
+                tab: 'adventure',
+                adventurePane: 'tavern',
+                toast: 'Recruit an adventurer at the Tavern',
+              })
+            } else {
+              set({ toast: `Tavern unlocks at Level ${TAVERN_UNLOCK_LEVEL}` })
+            }
+            return
+          case 'complete_adventure':
+            if (s.unlocked.includes('adventure_land')) {
+              set({
+                tab: 'adventure',
+                adventurePane: 'lands',
+                toast: goal.target
+                  ? 'Send a party on this expedition'
+                  : 'Complete an expedition in Adventure Land',
+              })
+            } else {
+              set({ toast: `Adventure Land unlocks at Level ${TAVERN_UNLOCK_LEVEL}` })
+            }
+            return
+          case 'craft_gear': {
+            if (!s.unlocked.includes('tavern')) {
+              set({ toast: `Workshops unlock at Level ${TAVERN_UNLOCK_LEVEL}` })
+              return
+            }
+            const blueprint = goal.target
+              ? GEAR_BLUEPRINT_BY_ID[goal.target]
+              : null
+            const buildingId =
+              blueprint?.buildingId ??
+              (s.unlocked.includes('smithy') ? 'smithy' : 'tailor_workshop')
+            set({
+              tab: 'adventure',
+              adventurePane: 'workshop',
+              selectedGearBuilding: buildingId,
+              toast: blueprint
+                ? `Craft ${blueprint.name} at the workshop`
+                : 'Craft gear at a workshop',
+            })
+            return
+          }
+          case 'gather_material':
+          case 'own_material':
+            if (goal.target) {
+              get().navigateToResource(goal.target as MaterialId, goal.amount, true)
+            }
+            return
         }
       },
 
@@ -1607,6 +1692,12 @@ export const useGame = create<GameState>()(
         const s = get()
         let missionProgress = s.missionProgress
         let eventProgress = s.eventProgress
+        const value =
+          kind === 'own_coins'
+            ? s.coins
+            : kind === 'own_material' && target
+              ? (s.materials[target as MaterialId] ?? 0)
+              : amount
 
         if (s.activeMissionId) {
           const mission = MISSION_BY_ID[s.activeMissionId]
@@ -1618,7 +1709,7 @@ export const useGame = create<GameState>()(
               s.activeMissionId,
               kind,
               target,
-              kind === 'own_coins' ? s.coins : amount,
+              value,
             )
           }
         }
@@ -1629,7 +1720,6 @@ export const useGame = create<GameState>()(
             const stage = event.stages[s.eventStageIndex]
             if (stage) {
               const parentId = eventStageParentId(s.activeEventId, s.eventStageIndex)
-              const value = kind === 'own_coins' ? s.coins : amount
               eventProgress = bumpGoals(
                 eventProgress,
                 stage.goals,
@@ -1992,6 +2082,10 @@ export const useGame = create<GameState>()(
         })
         if (recipe.output) {
           get().track('craft', recipe.output, outputQty)
+        }
+        if (recipe.materialOutput) {
+          get().track('gather_material', recipe.materialOutput, outputQty)
+          get().track('own_material', recipe.materialOutput)
         }
       },
 
@@ -2749,6 +2843,7 @@ export const useGame = create<GameState>()(
           adventurePane: 'recruits',
           toast: `${def.name} joined your party! Check Recruits to equip gear.`,
         })
+        get().track('recruit', npcId, 1)
         get().track('own_coins', undefined, get().coins)
       },
 
@@ -2857,6 +2952,10 @@ export const useGame = create<GameState>()(
           gearInventory: [...s.gearInventory, ...gearDrops],
           toast: `${adventure.name} complete! +${scaled.rewardCoins} coins · ${gearDrops.length} gear · recruits +${scaled.recruitXp} XP`,
         })
+        get().track('complete_adventure', job.adventureId, 1)
+        for (const matId of Object.keys(materialDrops) as MaterialId[]) {
+          get().track('own_material', matId)
+        }
       },
 
       startGearCraft: (blueprintId) => {
@@ -2947,6 +3046,7 @@ export const useGame = create<GameState>()(
             ? `Crafted ${blueprint.name} — ${QUALITY_LABEL[gear.quality]}! ✨`
             : `Crafted ${blueprint.name} (${QUALITY_LABEL[gear.quality]})`,
         })
+        get().track('craft_gear', job.blueprintId, 1)
       },
 
       equipGear: (gearInstanceId, npcInstanceId) => {
