@@ -268,6 +268,12 @@ button {
   gap: 4px;
 }
 
+.topbar-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .theme-toggle {
   border: 1px solid var(--panel-edge);
   background: rgba(63, 122, 69, 0.1);
@@ -1121,6 +1127,201 @@ html.theme-dark .ingredient-chip.need {
   display: flex;
   justify-content: space-between;
   gap: 8px;
+}
+
+.popup-card.ranking-panel {
+  width: min(100%, 380px);
+  max-height: min(85vh, 640px);
+  overflow-y: auto;
+  text-align: left;
+}
+
+.ranking-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ranking-panel-head .popup-title {
+  margin: 0;
+  text-align: left;
+}
+
+.ranking-close {
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+}
+
+.ranking-you {
+  margin-bottom: 10px;
+  text-align: left;
+}
+
+.ranking-you strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.ranking-tabs {
+  margin-bottom: 8px;
+}
+
+.ranking-tab-note {
+  margin: 0 0 8px;
+}
+
+.ranking-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.ranking-list li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px solid var(--panel-edge);
+  font-size: 0.85rem;
+}
+
+.ranking-list li.is-you {
+  border-color: var(--accent);
+  background: rgba(63, 122, 69, 0.12);
+  font-weight: 700;
+}
+
+.ranking-pos {
+  min-width: 2rem;
+  font-weight: 800;
+}
+
+.ranking-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranking-pts {
+  font-weight: 700;
+  color: var(--coin);
+  white-space: nowrap;
+}
+
+.ranking-empty {
+  padding: 12px;
+  text-align: center;
+}
+
+.ranking-error {
+  color: #b45309;
+}
+
+html.theme-dark .ranking-list li {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+html.theme-dark .ranking-list li.is-you {
+  background: rgba(143, 191, 122, 0.15);
+}
+
+.theme-toggle.has-badge {
+  position: relative;
+}
+
+.theme-toggle.has-badge::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e85d04;
+  border: 1px solid var(--panel);
+}
+
+.achievement-panel .achievement-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.achievement-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-edge);
+  background: rgba(255, 255, 255, 0.45);
+  text-align: left;
+}
+
+.achievement-card.claimed {
+  opacity: 0.65;
+}
+
+.achievement-card.ready {
+  border-color: var(--accent);
+  background: rgba(63, 122, 69, 0.1);
+}
+
+.achievement-badge {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.achievement-body {
+  min-width: 0;
+}
+
+.achievement-body strong {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.achievement-bar {
+  height: 4px;
+  margin: 6px 0 4px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.achievement-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.achievement-meta {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.achievement-claim {
+  align-self: center;
+}
+
+html.theme-dark .achievement-card {
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .tabnav {

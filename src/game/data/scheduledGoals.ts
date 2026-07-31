@@ -467,6 +467,20 @@ export function msUntilWeeklyReset(now = Date.now()): number {
   )
 }
 
+/** Day keys (UTC+4) from the current ranking week start through today. */
+export function dayKeysInRankingWeek(now = Date.now()): string[] {
+  const p = resetZoneParts(now)
+  const daysSinceTuesday = (p.day + 7 - 2) % 7
+  const keys: string[] = []
+  for (let i = 0; i <= daysSinceTuesday; i++) {
+    const d = new Date(Date.UTC(p.year, p.month, p.date - daysSinceTuesday + i))
+    keys.push(
+      `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}-${d.getUTCDate()}`,
+    )
+  }
+  return keys
+}
+
 function rollFromPool(
   pool: GoalTemplate[],
   count: number,

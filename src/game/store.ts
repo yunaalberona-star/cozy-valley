@@ -79,6 +79,11 @@ import {
   rankingTierLabel,
 } from './data/rankingTiers'
 import { submitGoalRanking } from './rankingClient'
+import {
+  ACHIEVEMENTS,
+  ACHIEVEMENT_BY_ID,
+  type AchievementKind,
+} from './data/achievements'
 import { LEGACY_MISSION_ID_MAP } from './data/missionChain'
 import { buildingUnlockLevel, unlocksCrossingLevels, unlocksForLevel } from './data/levelUnlocks'
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
@@ -1135,6 +1140,10 @@ function migrateSaveState(
     state.dailyRankingRank = null
     state.weeklyRankingRank = null
   }
+  if (version < 21) {
+    state.achievementProgress = {}
+    state.claimedAchievements = []
+  }
   return state
 }
 
@@ -1241,6 +1250,8 @@ export interface GameState {
   rankingWeekPoints: number
   dailyRankingRank: number | null
   weeklyRankingRank: number | null
+  achievementProgress: Record<string, number>
+  claimedAchievements: string[]
   selectedBuilding: BuildingId | null
   selectedAnimalBuilding: AnimalBuildingId | null
   selectedGearBuilding: GearBuildingId | null
@@ -1342,6 +1353,7 @@ export interface GameState {
   claimScheduledGoal: (period: 'daily' | 'weekly', slotId: string) => void
   claimScheduledBonus: (period: 'daily' | 'weekly') => Promise<void>
   refreshScheduledGoals: () => void
+  claimAchievement: (achievementId: string) => void
 
   recruitNpc: (npcId: string) => void
   startAdventure: (adventureId: string, npcInstanceIds: string[]) => void
@@ -1353,7 +1365,7 @@ export interface GameState {
   unequipGear: (gearInstanceId: string) => void
 
   track: (
-    kind: MissionGoal['kind'],
+    kind: AchievementKind,
     target: string | undefined,
     amount?: number,
   ) => void
@@ -1410,6 +1422,8 @@ const initial = () => {
     rankingWeekPoints: 0,
     dailyRankingRank: null as number | null,
     weeklyRankingRank: null as number | null,
+    achievementProgress: {} as Record<string, number>,
+    claimedAchievements: [] as string[],
     selectedBuilding: null as BuildingId | null,
     selectedAnimalBuilding: null as AnimalBuildingId | null,
     selectedGearBuilding: null as GearBuildingId | null,
@@ -1457,6 +1471,69 @@ function bumpGoals(
     changed = true
   }
   return changed ? next : progress
+}
+
+type AchievementSlice = Pick<
+  GameState,
+  | 'recruitedNpcs'
+  | 'ownedBuildings'
+  | 'completedMissions'
+  | 'xp'
+>
+
+function syncStateAchievements(
+  progress: Record<string, number>,
+  s: AchievementSlice,
+): Record<string, number> {
+  const next = { ...progress }
+  for (const ach of ACHIEVEMENTS) {
+    switch (ach.kind) {
+      case 'recruit':
+        next[ach.id] = Math.min(ach.amount, s.recruitedNpcs.length)
+        break
+      case 'purchase_building':
+        next[ach.id] = Math.min(ach.amount, s.ownedBuildings.length)
+        break
+      case 'claim_mission':
+        next[ach.id] = Math.min(ach.amount, s.completedMissions.length)
+        break
+      case 'reach_level':
+        next[ach.id] = Math.min(ach.amount, levelFromXp(s.xp))
+        break
+    }
+  }
+  return next
+}
+
+function bumpAchievementProgress(
+  progress: Record<string, number>,
+  kind: AchievementKind,
+  target: string | undefined,
+  value: number,
+  s: AchievementSlice,
+): Record<string, number> {
+  let next = syncStateAchievements(progress, s)
+
+  for (const ach of ACHIEVEMENTS) {
+    if (
+      ach.kind === 'recruit' ||
+      ach.kind === 'purchase_building' ||
+      ach.kind === 'claim_mission' ||
+      ach.kind === 'reach_level'
+    ) {
+      continue
+    }
+    if (ach.kind !== kind) continue
+    if (ach.target != null && ach.target !== target) continue
+    const cur = next[ach.id] ?? 0
+    if (cur >= ach.amount) continue
+    next[ach.id] = Math.min(ach.amount, cur + value)
+  }
+
+  for (const ach of ACHIEVEMENTS) {
+    if ((next[ach.id] ?? 0) !== (progress[ach.id] ?? 0)) return next
+  }
+  return progress
 }
 
 function persistedDefaults() {
@@ -1901,6 +1978,17 @@ export const useGame = create<GameState>()(
         let eventProgress = base.eventProgress
         let dailyGoalProgress = base.dailyGoalProgress
         let weeklyGoalProgress = base.weeklyGoalProgress
+        let achievementProgress = bumpAchievementProgress(
+          base.achievementProgress,
+          kind as AchievementKind,
+          target,
+          kind === 'own_coins'
+            ? base.coins
+            : kind === 'own_material' && target
+              ? (base.materials[target as MaterialId] ?? 0)
+              : amount,
+          base,
+        )
         const value =
           kind === 'own_coins'
             ? base.coins
@@ -1915,7 +2003,7 @@ export const useGame = create<GameState>()(
               missionProgress,
               mission.goals,
               base.activeMissionId,
-              kind,
+              kind as MissionGoal['kind'],
               target,
               value,
             )
@@ -1932,7 +2020,7 @@ export const useGame = create<GameState>()(
                 eventProgress,
                 stage.goals,
                 parentId,
-                kind,
+                kind as MissionGoal['kind'],
                 target,
                 value,
               )
@@ -1946,7 +2034,7 @@ export const useGame = create<GameState>()(
             dailyGoalProgress,
             dailyGoals,
             DAILY_GOALS_PARENT_ID,
-            kind,
+            kind as MissionGoal['kind'],
             target,
             value,
           )
@@ -1958,7 +2046,7 @@ export const useGame = create<GameState>()(
             weeklyGoalProgress,
             weeklyGoals,
             WEEKLY_GOALS_PARENT_ID,
-            kind,
+            kind as MissionGoal['kind'],
             target,
             value,
           )
@@ -1971,6 +2059,7 @@ export const useGame = create<GameState>()(
           eventProgress !== s.eventProgress ||
           dailyGoalProgress !== s.dailyGoalProgress ||
           weeklyGoalProgress !== s.weeklyGoalProgress ||
+          achievementProgress !== s.achievementProgress ||
           missionPatch.popupQueue !== s.popupQueue ||
           Object.keys(goalRefresh).length > 0
         ) {
@@ -1980,6 +2069,7 @@ export const useGame = create<GameState>()(
             eventProgress,
             dailyGoalProgress,
             weeklyGoalProgress,
+            achievementProgress,
             popupQueue: missionPatch.popupQueue,
           })
         }
@@ -2156,6 +2246,7 @@ export const useGame = create<GameState>()(
         if (left <= 0) delete saplings[treeId]
         else saplings[treeId] = left
         set({ treeSlots, saplings })
+        get().track('plant_tree', treeId, 1)
       },
 
       harvestTree: (slotIndex) => {
@@ -2357,6 +2448,7 @@ export const useGame = create<GameState>()(
           ownedBuildings: [...s.ownedBuildings, id],
           toast: `${building.name} built! Queue: ${BASE_MACHINE_QUEUE} slots`,
         })
+        get().track('purchase_building', id, 1)
         get().track('own_coins', undefined, get().coins)
       },
 
@@ -2813,14 +2905,20 @@ export const useGame = create<GameState>()(
 
       claimMarketSale: async (payoutId) => {
         if (!isSupabaseConfigured()) return false
+        const sale = get().unclaimedMarketSales.find((s) => s.payoutId === payoutId)
         try {
           const amount = await claimSinglePayout(payoutId, getPlayerId())
           set({
             coins: get().coins + amount,
             unclaimedMarketSales: get().unclaimedMarketSales.filter(
-              (sale) => sale.payoutId !== payoutId,
+              (s) => s.payoutId !== payoutId,
             ),
           })
+          get().track(
+            'market_sell',
+            undefined,
+            sale?.listing.quantity ?? 1,
+          )
           get().track('own_coins', undefined, get().coins)
           return true
         } catch (err) {
@@ -3067,6 +3165,28 @@ export const useGame = create<GameState>()(
         const s = get()
         const patch = ensureScheduledGoals(levelFromXp(s.xp), s)
         if (Object.keys(patch).length > 0) set(patch)
+      },
+
+      claimAchievement: (achievementId) => {
+        const ach = ACHIEVEMENT_BY_ID[achievementId]
+        if (!ach) return
+        const s = get()
+        if (s.claimedAchievements.includes(achievementId)) {
+          set({ toast: 'Achievement already claimed' })
+          return
+        }
+        const progress = syncStateAchievements(s.achievementProgress, s)
+        if ((progress[achievementId] ?? 0) < ach.amount) {
+          set({ toast: 'Achievement not complete yet' })
+          return
+        }
+        set({
+          achievementProgress: progress,
+          claimedAchievements: [...s.claimedAchievements, achievementId],
+          coins: s.coins + ach.rewardCoins,
+          toast: `${ach.badge} ${ach.title} — +🪙 ${ach.rewardCoins}`,
+        })
+        get().track('own_coins', undefined, get().coins)
       },
 
       claimScheduledGoal: (period, slotId) => {
@@ -3546,6 +3666,10 @@ export const useGame = create<GameState>()(
         state.unlocked = syncLevelUnlocks(state.xp, state.unlocked ?? [])
         const level = levelFromXp(state.xp)
         Object.assign(state, ensureScheduledGoals(level, state as GameState))
+        state.achievementProgress = syncStateAchievements(
+          (state.achievementProgress as Record<string, number>) ?? {},
+          state as GameState,
+        )
         if (!state.activeMissionId) {
           const fix = ensureActiveMission(
             state.completedMissions ?? [],
@@ -3628,6 +3752,8 @@ export const useGame = create<GameState>()(
         rankingWeekPoints: s.rankingWeekPoints,
         dailyRankingRank: s.dailyRankingRank,
         weeklyRankingRank: s.weeklyRankingRank,
+        achievementProgress: s.achievementProgress,
+        claimedAchievements: s.claimedAchievements,
         selectedBuilding: s.selectedBuilding,
         selectedAnimalBuilding: s.selectedAnimalBuilding,
         selectedGearBuilding: s.selectedGearBuilding,

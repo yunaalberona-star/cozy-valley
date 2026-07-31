@@ -54,14 +54,32 @@ import {
   msUntilWeeklyReset,
   slotComplete,
   WEEKLY_RESET_LABEL,
+  dayKeysInRankingWeek,
+  periodDayKey,
+  periodWeekKey,
   type GoalBonus,
   type ScheduledGoalSlot,
 } from './game/data/scheduledGoals'
 import {
   RANKING_TIERS,
+  rankingPointsForRank,
   rankingTierLabel,
   type GoalPeriodKind,
 } from './game/data/rankingTiers'
+import {
+  ACHIEVEMENTS,
+  achievementProgressValue,
+  achievementsReadyToClaim,
+  isAchievementClaimed,
+  isAchievementComplete,
+} from './game/data/achievements'
+import {
+  fetchGoalRankingLeaderboard,
+  fetchRankingWeekPointsLeaderboard,
+  RankingError,
+  type GoalRankingRow,
+  type RankingPointsRow,
+} from './game/rankingClient'
 import { buildingUnlockLevel } from './game/data/levelUnlocks'
 import {
   GATHER_SITE_MAX_SLOTS,
@@ -171,49 +189,449 @@ const TABS: { id: TabId; label: string; emoji: string }[] = [
   { id: 'shop', label: 'Shop', emoji: '🛒' },
 ]
 
+function rankMedal(rank: number): string {
+  if (rank === 1) return '🥇'
+  if (rank === 2) return '🥈'
+  if (rank === 3) return '🥉'
+  return `#${rank}`
+}
+
+function RankingPanel({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  const [tab, setTab] = useState<'week' | 'weekly' | 'daily'>('week')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [weekPoints, setWeekPoints] = useState<RankingPointsRow[]>([])
+  const [weeklyFinish, setWeeklyFinish] = useState<GoalRankingRow[]>([])
+  const [dailyFinish, setDailyFinish] = useState<GoalRankingRow[]>([])
+
+  const rankingWeekPoints = useGame((s) => s.rankingWeekPoints)
+  const rankingPoints = useGame((s) => s.rankingPoints)
+  const weeklyGoalsPeriodKey = useGame((s) => s.weeklyGoalsPeriodKey)
+  const dailyGoalsPeriodKey = useGame((s) => s.dailyGoalsPeriodKey)
+  const playerId = getPlayerId()
+  const playerName = getPlayerName() ?? 'Farmer'
+
+  const myWeekRow = weekPoints.find((r) => r.player_id === playerId)
+  const myWeeklyRow = weeklyFinish.find((r) => r.player_id === playerId)
+  const myDailyRow = dailyFinish.find((r) => r.player_id === playerId)
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  useEffect(() => {
+    if (!open) return
+    if (!isSupabaseConfigured()) {
+      setError('Ranking is not configured on this server.')
+      setWeekPoints([])
+      setWeeklyFinish([])
+      setDailyFinish([])
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    ;(async () => {
+      try {
+        const dayKeys = dayKeysInRankingWeek()
+        const weekKey = weeklyGoalsPeriodKey || periodWeekKey()
+        const dayKey = dailyGoalsPeriodKey || periodDayKey()
+        const [wp, wf, df] = await Promise.all([
+          fetchRankingWeekPointsLeaderboard(weekKey, dayKeys),
+          fetchGoalRankingLeaderboard('weekly', weekKey),
+          fetchGoalRankingLeaderboard('daily', dayKey),
+        ])
+        if (cancelled) return
+        setWeekPoints(wp)
+        setWeeklyFinish(wf)
+        setDailyFinish(df)
+      } catch (err) {
+        if (cancelled) return
+        setError(
+          err instanceof RankingError
+            ? err.message
+            : 'Could not load rankings.',
+        )
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [open, weeklyGoalsPeriodKey, dailyGoalsPeriodKey])
+
+  if (!open) return null
+
+  return (
+    <div className="popup-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="popup-card ranking-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ranking-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ranking-panel-head">
+          <h2 id="ranking-title" className="popup-title">
+            🏆 Rankings
+          </h2>
+          <button
+            type="button"
+            className="btn ghost ranking-close"
+            onClick={onClose}
+            aria-label="Close rankings"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="recipe-card highlight ranking-you">
+          <strong>{playerName}</strong>
+          <p className="muted small">
+            This week: 🏆 {rankingWeekPoints} pts
+            {myWeekRow ? ` · Leaderboard #${myWeekRow.rank}` : ''}
+          </p>
+          <p className="muted small">All-time: 🏆 {rankingPoints} pts</p>
+          {!getPlayerName() && (
+            <p className="muted small">
+              Set your farmer name in Market chat to appear on the board.
+            </p>
+          )}
+        </div>
+
+        <div className="pane-tabs pane-tabs-3 ranking-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'week'}
+            className={tab === 'week' ? 'active' : ''}
+            onClick={() => setTab('week')}
+          >
+            Week pts
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'weekly'}
+            className={tab === 'weekly' ? 'active' : ''}
+            onClick={() => setTab('weekly')}
+          >
+            Weekly
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'daily'}
+            className={tab === 'daily' ? 'active' : ''}
+            onClick={() => setTab('daily')}
+          >
+            Today
+          </button>
+        </div>
+
+        {tab === 'week' && (
+          <p className="muted small ranking-tab-note">
+            Total ranking points this week (daily + weekly bonuses). Resets{' '}
+            {WEEKLY_RESET_LABEL}.
+          </p>
+        )}
+        {tab === 'weekly' && (
+          <p className="muted small ranking-tab-note">
+            Who finished all weekly goals fastest this period
+            {myWeeklyRow
+              ? ` — you: #${myWeeklyRow.rank} (${rankingTierLabel(myWeeklyRow.rank)})`
+              : ''}
+            .
+          </p>
+        )}
+        {tab === 'daily' && (
+          <p className="muted small ranking-tab-note">
+            Who finished all daily goals fastest today
+            {myDailyRow
+              ? ` — you: #${myDailyRow.rank} (${rankingTierLabel(myDailyRow.rank)})`
+              : ''}
+            .
+          </p>
+        )}
+
+        {loading && <p className="muted pad small">Loading rankings…</p>}
+        {error && !loading && (
+          <p className="muted pad small ranking-error">{error}</p>
+        )}
+
+        {!loading && !error && tab === 'week' && (
+          <ol className="ranking-list">
+            {weekPoints.length === 0 ? (
+              <li className="ranking-empty muted">No entries yet this week.</li>
+            ) : (
+              weekPoints.map((row) => (
+                <li
+                  key={row.player_id}
+                  className={row.player_id === playerId ? 'is-you' : ''}
+                >
+                  <span className="ranking-pos">{rankMedal(row.rank)}</span>
+                  <span className="ranking-name">{row.player_name}</span>
+                  <span className="ranking-pts">🏆 {row.points}</span>
+                </li>
+              ))
+            )}
+          </ol>
+        )}
+
+        {!loading && !error && tab === 'weekly' && (
+          <ol className="ranking-list">
+            {weeklyFinish.length === 0 ? (
+              <li className="ranking-empty muted">No weekly finishes yet.</li>
+            ) : (
+              weeklyFinish.map((row) => (
+                <li
+                  key={row.player_id}
+                  className={row.player_id === playerId ? 'is-you' : ''}
+                >
+                  <span className="ranking-pos">{rankMedal(row.rank)}</span>
+                  <span className="ranking-name">{row.player_name}</span>
+                  <span className="ranking-pts">
+                    🏆 {rankingPointsForRank('weekly', row.rank)}
+                  </span>
+                </li>
+              ))
+            )}
+          </ol>
+        )}
+
+        {!loading && !error && tab === 'daily' && (
+          <ol className="ranking-list">
+            {dailyFinish.length === 0 ? (
+              <li className="ranking-empty muted">No daily finishes yet.</li>
+            ) : (
+              dailyFinish.map((row) => (
+                <li
+                  key={row.player_id}
+                  className={row.player_id === playerId ? 'is-you' : ''}
+                >
+                  <span className="ranking-pos">{rankMedal(row.rank)}</span>
+                  <span className="ranking-name">{row.player_name}</span>
+                  <span className="ranking-pts">
+                    🏆 {rankingPointsForRank('daily', row.rank)}
+                  </span>
+                </li>
+              ))
+            )}
+          </ol>
+        )}
+
+        <button type="button" className="btn full" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function AchievementPanel({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  const achievementProgress = useGame((s) => s.achievementProgress)
+  const claimedAchievements = useGame((s) => s.claimedAchievements)
+  const claimAchievement = useGame((s) => s.claimAchievement)
+  const ready = achievementsReadyToClaim(achievementProgress, claimedAchievements)
+  const claimedCount = claimedAchievements.length
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open) return null
+
+  return (
+    <div className="popup-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="popup-card ranking-panel achievement-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="achievement-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ranking-panel-head">
+          <h2 id="achievement-title" className="popup-title">
+            🎖️ Achievements
+          </h2>
+          <button
+            type="button"
+            className="btn ghost ranking-close"
+            onClick={onClose}
+            aria-label="Close achievements"
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="muted small">
+          {claimedCount}/{ACHIEVEMENTS.length} badges claimed
+          {ready.length > 0 ? ` · ${ready.length} ready to claim` : ''}
+        </p>
+
+        <div className="achievement-list">
+          {ACHIEVEMENTS.map((ach) => {
+            const cur = achievementProgressValue(achievementProgress, ach.id)
+            const claimed = isAchievementClaimed(ach.id, claimedAchievements)
+            const complete = isAchievementComplete(ach, achievementProgress)
+            const pct = Math.min(100, (cur / ach.amount) * 100)
+            return (
+              <div
+                key={ach.id}
+                className={`achievement-card${claimed ? ' claimed' : ''}${complete && !claimed ? ' ready' : ''}`}
+              >
+                <div className="achievement-badge" aria-hidden>
+                  {ach.badge}
+                </div>
+                <div className="achievement-body">
+                  <strong>{ach.title}</strong>
+                  <p className="muted small">{ach.description}</p>
+                  {!claimed && (
+                    <div className="achievement-bar" aria-hidden>
+                      <span style={{ width: `${pct}%` }} />
+                    </div>
+                  )}
+                  <p className="achievement-meta">
+                    {claimed ? (
+                      'Claimed ✓'
+                    ) : (
+                      <>
+                        {Math.min(cur, ach.amount)}/{ach.amount} · 🪙{' '}
+                        {ach.rewardCoins}
+                      </>
+                    )}
+                  </p>
+                </div>
+                {complete && !claimed && (
+                  <button
+                    type="button"
+                    className="btn tiny achievement-claim"
+                    onClick={() => claimAchievement(ach.id)}
+                  >
+                    Claim
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        <button type="button" className="btn full" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function TopBar() {
   const coins = useGame((s) => s.coins)
   const xp = useGame((s) => s.xp)
   const darkMode = useGame((s) => s.darkMode)
   const toggleDarkMode = useGame((s) => s.toggleDarkMode)
+  const rankingWeekPoints = useGame((s) => s.rankingWeekPoints)
+  const achievementProgress = useGame((s) => s.achievementProgress)
+  const claimedAchievements = useGame((s) => s.claimedAchievements)
+  const readyAchievements = achievementsReadyToClaim(
+    achievementProgress,
+    claimedAchievements,
+  ).length
+  const [rankingOpen, setRankingOpen] = useState(false)
+  const [achievementsOpen, setAchievementsOpen] = useState(false)
   const { level, into, need } = xpProgress(xp)
   const pct = Math.min(100, (into / need) * 100)
 
   return (
-    <header className="topbar">
-      <div className="brand">
-        <span className="brand-mark" aria-hidden>
-          🌾
-        </span>
-        <div>
-          <p className="brand-name">Cozy Valley</p>
-          <p className="brand-sub">level up to grow the valley</p>
+    <>
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden>
+            🌾
+          </span>
+          <div>
+            <p className="brand-name">Cozy Valley</p>
+            <p className="brand-sub">level up to grow the valley</p>
+          </div>
         </div>
-      </div>
-      <div className="stats">
-        <div className="stat coin" title="Coins">
-          <span>🪙</span>
-          <strong>{coins}</strong>
-        </div>
-        <div className="stat-level-col">
-          <button
-            type="button"
-            className="theme-toggle"
-            onClick={toggleDarkMode}
-            aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-            title={darkMode ? 'Light mode' : 'Dark mode'}
-          >
-            {darkMode ? '☀️' : '🌙'}
-          </button>
-          <div className="stat level">
-            <span className="lvl">Lv {level}</span>
-            <div className="xp-track" aria-hidden>
-              <div className="xp-fill" style={{ width: `${pct}%` }} />
+        <div className="stats">
+          <div className="stat coin" title="Coins">
+            <span>🪙</span>
+            <strong>{coins}</strong>
+          </div>
+          <div className="stat-level-col">
+            <div className="topbar-icon-row">
+              <button
+                type="button"
+                className={`theme-toggle${readyAchievements > 0 ? ' has-badge' : ''}`}
+                onClick={() => setAchievementsOpen(true)}
+                aria-label="View achievements"
+                title={
+                  readyAchievements > 0
+                    ? `${readyAchievements} achievement(s) ready`
+                    : 'Achievements'
+                }
+              >
+                🎖️
+              </button>
+              <button
+                type="button"
+                className="theme-toggle"
+                onClick={() => setRankingOpen(true)}
+                aria-label="View rankings"
+                title={`Rankings · ${rankingWeekPoints} pts this week`}
+              >
+                🏆
+              </button>
+              <button
+                type="button"
+                className="theme-toggle"
+                onClick={toggleDarkMode}
+                aria-label={
+                  darkMode ? 'Switch to light mode' : 'Switch to dark mode'
+                }
+                title={darkMode ? 'Light mode' : 'Dark mode'}
+              >
+                {darkMode ? '☀️' : '🌙'}
+              </button>
+            </div>
+            <div className="stat level">
+              <span className="lvl">Lv {level}</span>
+              <div className="xp-track" aria-hidden>
+                <div className="xp-fill" style={{ width: `${pct}%` }} />
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </header>
+      </header>
+      <RankingPanel open={rankingOpen} onClose={() => setRankingOpen(false)} />
+      <AchievementPanel
+        open={achievementsOpen}
+        onClose={() => setAchievementsOpen(false)}
+      />
+    </>
   )
 }
 

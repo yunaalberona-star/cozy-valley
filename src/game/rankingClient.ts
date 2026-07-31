@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { isSupabaseConfigured } from './marketClient'
 import { getPlayerId } from './marketClient'
 import type { GoalPeriodKind } from './data/rankingTiers'
+import { rankingPointsForRank } from './data/rankingTiers'
 
 export class RankingError extends Error {
   code?: string
@@ -110,3 +111,68 @@ export async function fetchGoalRankingLeaderboard(
     rank: index + 1,
   })) as GoalRankingRow[]
 }
+
+export interface RankingPointsRow {
+  player_id: string
+  player_name: string
+  points: number
+  rank: number
+}
+
+function addRankingPoints(
+  totals: Map<string, { name: string; points: number }>,
+  playerId: string,
+  playerName: string,
+  points: number,
+) {
+  const cur = totals.get(playerId)
+  if (cur) {
+    cur.points += points
+    if (playerName) cur.name = playerName
+  } else {
+    totals.set(playerId, { name: playerName, points })
+  }
+}
+
+/** Sum daily + weekly goal bonus points for the current ranking week. */
+export async function fetchRankingWeekPointsLeaderboard(
+  weekKey: string,
+  dayKeys: string[],
+  limit = 50,
+): Promise<RankingPointsRow[]> {
+  const totals = new Map<string, { name: string; points: number }>()
+
+  const weekly = await fetchGoalRankingLeaderboard('weekly', weekKey, 200)
+  for (const row of weekly) {
+    addRankingPoints(
+      totals,
+      row.player_id,
+      row.player_name,
+      rankingPointsForRank('weekly', row.rank),
+    )
+  }
+
+  for (const dayKey of dayKeys) {
+    const daily = await fetchGoalRankingLeaderboard('daily', dayKey, 200)
+    for (const row of daily) {
+      addRankingPoints(
+        totals,
+        row.player_id,
+        row.player_name,
+        rankingPointsForRank('daily', row.rank),
+      )
+    }
+  }
+
+  return [...totals.entries()]
+    .sort((a, b) => b[1].points - a[1].points)
+    .slice(0, limit)
+    .map(([player_id, v], index) => ({
+      player_id,
+      player_name: v.name,
+      points: v.points,
+      rank: index + 1,
+    }))
+}
+
+export { isSupabaseConfigured } from './marketClient'
