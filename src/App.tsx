@@ -223,7 +223,11 @@ function BuildingIcon({
       />
     )
   }
-  return <span className={className}>{building.emoji}</span>
+  return (
+    <span className={['gear-icon', className].filter(Boolean).join(' ')}>
+      {building.emoji}
+    </span>
+  )
 }
 
 const TABS: { id: TabId; label: string; emoji: string }[] = [
@@ -1772,9 +1776,9 @@ function MachinesView() {
                   disabled={blueprintLocked}
                   onClick={() => !blueprintLocked && selectBuilding(b.id)}
                 >
-                  <BuildingIcon building={b} className="big-emoji" />
-                  <strong>{b.name}</strong>
-                  <small>
+                  <BuildingIcon building={b} className="machine-card-icon" />
+                  <strong className="machine-card-name">{b.name}</strong>
+                  <small className="machine-card-status">
                     {blueprintLocked
                       ? '🔒 Mission blueprint'
                       : isOwned
@@ -1809,7 +1813,7 @@ function MachinesView() {
           </button>
           <div className="recipe-card highlight">
             <div className="recipe-top">
-              <BuildingIcon building={building} className="big-emoji" />
+              <BuildingIcon building={building} className="building-icon-lg" />
               <div>
                 <strong>{building.name}</strong>
                 <p className="muted">{building.blurb}</p>
@@ -3762,7 +3766,7 @@ function ShopUpgradePane() {
               return (
                 <div key={id} className="recipe-card">
                   <div className="recipe-top">
-                    <BuildingIcon building={building} className="big-emoji" />
+                    <BuildingIcon building={building} className="building-icon-lg" />
                     <div>
                       <strong>{building.name}</strong>
                       <p className="muted">

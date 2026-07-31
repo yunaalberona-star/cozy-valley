@@ -72,6 +72,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
     id: 'feed_mill',
     name: 'Feed Mill',
     emoji: '🧺',
+    icon: '/icons/buildings/feed-mill.png',
     blurb: 'Mix custom feed for each animal — scratch, hay, slop & more.',
     buyCost: 110,
   },
