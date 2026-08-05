@@ -50,6 +50,8 @@ import {
 import {
   EVENT_BY_ID,
   EVENTS,
+  findNextMissionInChain,
+  MISSIONS,
   MISSION_BY_ID,
   eventStageParentId,
   isMissionLevelGated,
@@ -1011,7 +1013,13 @@ function StoryMissionsPane() {
   const playerLevel = levelFromXp(xp)
 
   const mission = activeMissionId ? MISSION_BY_ID[activeMissionId] : null
-  const levelGated = mission ? isMissionLevelGated(mission, playerLevel) : false
+  const nextInChain = !mission
+    ? findNextMissionInChain(completedMissions, MISSIONS)
+    : null
+  const displayMission = mission ?? nextInChain
+  const levelGated = displayMission
+    ? isMissionLevelGated(displayMission, playerLevel)
+    : false
   const missionDone =
     mission &&
     !levelGated &&
@@ -1019,29 +1027,29 @@ function StoryMissionsPane() {
       (g) =>
         missionGoalProgress(missionProgress, mission.id, g.id) >= g.amount,
     )
-  const allComplete = completedMissions.length >= 50 && !mission
+  const allComplete = completedMissions.length >= MISSIONS.length && !mission
 
   return (
     <>
-      {mission ? (
+      {displayMission ? (
         <>
           <p className="chapter-label">
-            {mission.chapterTitle}
-            {mission.npcEmoji && mission.npcName ? (
-              <span className="muted"> · {mission.npcEmoji} {mission.npcName}</span>
+            {displayMission.chapterTitle}
+            {displayMission.npcEmoji && displayMission.npcName ? (
+              <span className="muted"> · {displayMission.npcEmoji} {displayMission.npcName}</span>
             ) : null}
           </p>
           <div className={`recipe-card highlight${levelGated ? ' level-gated' : ''}`}>
             <div className="recipe-top">
-              <span className="big-emoji">{mission.emoji}</span>
+              <span className="big-emoji">{displayMission.emoji}</span>
               <div>
-                <strong>{mission.name}</strong>
-                <p className="muted">{mission.story}</p>
+                <strong>{displayMission.name}</strong>
+                <p className="muted">{displayMission.story}</p>
               </div>
             </div>
-            {levelGated ? (
+            {levelGated || !mission ? (
               <p className="level-gate-msg">
-                🔒 Reach Level {mission.minLevel} to begin this mission.
+                🔒 Reach Level {displayMission.minLevel} to begin this mission.
                 Keep farming and crafting to level up!
               </p>
             ) : (
@@ -1069,14 +1077,14 @@ function StoryMissionsPane() {
           </div>
         </>
       ) : allComplete ? (
-        <p className="muted pad">All 50 story missions complete. Nice work!</p>
+        <p className="muted pad">All {MISSIONS.length} story missions complete. Nice work!</p>
       ) : (
         <p className="muted pad">Loading missions…</p>
       )}
 
       {completedMissions.length > 0 && (
         <p className="muted pad small">
-          Completed: {completedMissions.length} / 50 missions
+          Completed: {completedMissions.length} / {MISSIONS.length} missions
         </p>
       )}
     </>
@@ -1867,9 +1875,6 @@ function MachinesView() {
   const { level } = xpProgress(xp)
   const coins = useGame((s) => s.coins)
   const isBlueprintAvailable = useGame((s) => s.isBlueprintAvailable)
-  const activeMission = useGame((s) =>
-    s.activeMissionId ? MISSION_BY_ID[s.activeMissionId] : null,
-  )
   const ownedBuildings = useGame((s) => s.ownedBuildings)
   const machineQueueBonus = useGame((s) => s.machineQueueBonus)
   const guideItemHighlights = useGame((s) => s.guideItemHighlights)
@@ -2077,11 +2082,7 @@ function MachinesView() {
 
           <div className="card-list">
             {recipes.map((recipe) => {
-              const recipeLocked = !isRecipeUnlocked(
-                recipe.id,
-                level,
-                activeMission,
-              )
+              const recipeLocked = !isRecipeUnlocked(recipe.id, level)
               const missing = Object.entries(recipe.inputs).some(([id, qty]) => {
                 const need = qty ?? 0
                 if (id in MATERIAL_META) {

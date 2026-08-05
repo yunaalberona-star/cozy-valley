@@ -1,10 +1,13 @@
 import { ANIMALS } from './animals'
-import { ADVENTURES } from './adventures'
-import { ITEM_META, RECIPES } from './buildings'
-import { CROP_LIST } from './crops'
+import { ADVENTURES, TAVERN_UNLOCK_LEVEL } from './adventures'
+import { ITEM_META, ORDERS_UNLOCK_LEVEL, RECIPES } from './buildings'
+import { CROP_LIST, CROPS } from './crops'
 import { GEAR_BLUEPRINTS, MATERIAL_META } from './gear'
+import { GATHER_SITES } from './gatherSites'
+import { gatherSiteForMaterial } from './itemSources'
+import { buildingUnlockLevel } from './levelUnlocks'
 import { NPCS } from './npcs'
-import { TREE_LIST } from './trees'
+import { TREE_LIST, treeForProduct, TREES } from './trees'
 import { recipeUnlockLevel } from './unlockOrder'
 import type {
   AnimalTypeId,
@@ -63,8 +66,8 @@ const MISSION_STORIES: Record<number, string> = {
   9: 'Soft fleece season! Tend sheep and bees, then weave cloth on the Loom.',
   10: 'The valley fair is near. Sew a sweater, bottle wine, and save up coins.',
   11: 'Ducks splash at the pond. Raise ducks and mix duck feed for extra eggs.',
-  12: 'Goat Hill calls. Fresh goat milk and butter for the hillside café.',
-  13: 'Smoke rises from the sty. Pigs, bacon, and a pot of hearty soup.',
+  12: 'Bull Pen opens on the ridge. Tend bulls, gather hides, and churn butter for the café.',
+  13: 'Smoke rises from the kitchen. Hearty soup and grilled sides for hungry travelers.',
   14: 'Master Chef week! Candy, cake, pie — and keep the order board busy.',
   15: 'Grove Keeper Lila opens the orchard gate. "Plant apple trees and press your first valley cider."',
   16: 'Sun-warmed oranges ripen on the hill. Fill bottles for the morning market.',
@@ -423,16 +426,16 @@ function goalsForMission(n: number): MissionGoal[] {
   }
   if (n === 12) {
     return [
-      goalBuy('goat', 1),
-      goalCollect('goat_milk', 3),
-      goalCraft('butter', 1),
+      goalBuy('bull', 1),
+      goalOwnMaterial('cow_hide', 1),
+      goalCraft('butter', 2),
     ]
   }
   if (n === 13) {
     return [
-      goalBuy('pig', 1),
-      goalCollect('bacon', 2),
-      goalCraft('soup', 1),
+      goalCraft('soup', 2),
+      goalCraft('grilled_veg', 2),
+      goalOrder(1),
     ]
   }
   if (n === 14) {
@@ -571,6 +574,174 @@ function goalsForMission(n: number): MissionGoal[] {
   return goals
 }
 
+/** Bridge missions inserted when building unlocks lag story sequence. */
+const BRIDGE_MISSIONS_AFTER: Record<
+  number,
+  Omit<MissionDef, 'requires' | 'rewardCoins' | 'rewardXp' | 'unlocks' | 'chapter' | 'chapterTitle' | 'npcName' | 'npcEmoji'>[]
+> = {
+  7: [
+    {
+      id: 'm7b_busy_bees',
+      name: 'Busy Bees',
+      emoji: '🐝',
+      story:
+        'Beekeeper Ana opens the apiary. Tend hives and gather golden honey for the valley pantry.',
+      minLevel: 13,
+      goals: [goalBuy('bee', 1), goalCollect('honey', 2)],
+    },
+    {
+      id: 'm7c_fire_side',
+      name: 'Fire Side Dishes',
+      emoji: '🔥',
+      story:
+        'Chef Eli fires up the grill. Sear fresh vegetables for the evening market stand.',
+      minLevel: 14,
+      goals: [goalCraft('grilled_veg', 2)],
+    },
+    {
+      id: 'm7d_cider_start',
+      name: 'Cider Start',
+      emoji: '🍎',
+      story:
+        'The orchard press whirs to life. Harvest apples and bottle your first cider.',
+      minLevel: 15,
+      goals: [goalHarvest('apple', 6), goalCraft('apple_cider', 1)],
+    },
+  ],
+  9: [
+    {
+      id: 'm9b_goat_trail',
+      name: 'Goat Trail',
+      emoji: '🐐',
+      story:
+        'Goats clip-clop up the hillside. Fresh milk and churned butter for the café.',
+      minLevel: 19,
+      goals: [
+        goalBuy('goat', 1),
+        goalCollect('goat_milk', 2),
+        goalCraft('butter', 1),
+      ],
+    },
+    {
+      id: 'm9c_stitch_warm',
+      name: 'Stitch Warm',
+      emoji: '🧥',
+      story:
+        'The sewing room opens. Weave wool into a cozy sweater for the fair.',
+      minLevel: 20,
+      goals: [goalCraft('sweater', 1)],
+    },
+    {
+      id: 'm9d_sty_preview',
+      name: 'Sty Preview',
+      emoji: '🐷',
+      story:
+        'Pigs root in the pen. Collect bacon and keep the smokehouse busy.',
+      minLevel: 21,
+      goals: [goalBuy('pig', 1), goalCollect('bacon', 2)],
+    },
+  ],
+}
+
+function collectAnimalRequiredLevel(
+  productId: ItemId,
+  goals: MissionGoal[],
+): number {
+  const buyTargets = goals
+    .filter((g) => g.kind === 'buy_animal' && g.target)
+    .map((g) => g.target as AnimalTypeId)
+  const buyProductIds = buyTargets
+    .map((id) => ANIMALS[id]?.product)
+    .filter((p): p is NonNullable<typeof p> => p != null)
+  if (buyProductIds.some((p) => p === productId)) {
+    for (const animalId of buyTargets) {
+      const def = ANIMALS[animalId]
+      if (def?.product === productId) {
+        return buildingUnlockLevel(def.buildingId)
+      }
+    }
+  }
+  const candidates = Object.values(ANIMALS).filter((a) => a.product === productId)
+  if (candidates.length === 0) return 1
+  return Math.min(...candidates.map((a) => buildingUnlockLevel(a.buildingId)))
+}
+
+export function missionRequiredLevel(goals: MissionGoal[]): number {
+  let min = 1
+  for (const goal of goals) {
+    let need = 1
+    switch (goal.kind) {
+      case 'harvest': {
+        const id = goal.target as ItemId
+        if (id in CROPS) need = CROPS[id as keyof typeof CROPS].unlockLevel
+        else {
+          const treeId = treeForProduct(id)
+          if (treeId) need = TREES[treeId].unlockLevel
+        }
+        break
+      }
+      case 'craft': {
+        const itemId = goal.target as ItemId
+        const recipe = RECIPES.find((r) => r.output === itemId)
+        if (recipe) {
+          need = Math.max(
+            recipeUnlockLevel(recipe.id),
+            buildingUnlockLevel(recipe.buildingId),
+          )
+        }
+        break
+      }
+      case 'buy_animal': {
+        const def = ANIMALS[goal.target as AnimalTypeId]
+        if (def) need = buildingUnlockLevel(def.buildingId)
+        break
+      }
+      case 'collect_animal':
+        if (goal.target) {
+          need = collectAnimalRequiredLevel(goal.target as ItemId, goals)
+        }
+        break
+      case 'gather_material': {
+        const materialId = goal.target as MaterialId
+        const site = gatherSiteForMaterial(materialId)
+        if (site) need = buildingUnlockLevel(GATHER_SITES[site].machineId)
+        const recipe = RECIPES.find((r) => r.materialOutput === materialId)
+        if (recipe) {
+          need = Math.max(
+            need,
+            buildingUnlockLevel(recipe.buildingId),
+            recipeUnlockLevel(recipe.id),
+          )
+        }
+        break
+      }
+      case 'craft_gear': {
+        if (goal.target) {
+          const bp = GEAR_BLUEPRINTS.find((b) => b.id === goal.target)
+          if (bp) need = buildingUnlockLevel(bp.buildingId)
+        }
+        break
+      }
+      case 'fulfill_order':
+        need = ORDERS_UNLOCK_LEVEL
+        break
+      case 'recruit':
+      case 'complete_adventure':
+        need = TAVERN_UNLOCK_LEVEL
+        break
+      case 'own_material':
+        if (goal.target) {
+          need = buildingUnlockLevel('miner')
+        }
+        break
+      default:
+        break
+    }
+    min = Math.max(min, need)
+  }
+  return min
+}
+
 function storyFor(n: number): string {
   if (MISSION_STORIES[n]) return MISSION_STORIES[n]!
   const { npcName } = chapterForMission(n)
@@ -619,25 +790,56 @@ function rewardsFor(n: number): { coins: number; xp: number } {
 
 export function buildMissionChain(maxLevel = 50): MissionDef[] {
   const missions: MissionDef[] = []
+  let prevId: string | undefined
+
   for (let n = 1; n <= maxLevel; n++) {
+    const goals = goalsForMission(n)
+    const reqFromGoals = missionRequiredLevel(goals)
     const { coins, xp } = rewardsFor(n)
     const chapterMeta = chapterForMission(n)
+    const id = missionId(n)
     missions.push({
-      id: missionId(n),
+      id,
       name: nameFor(n),
       emoji: emojiFor(n),
       story: storyFor(n),
-      goals: goalsForMission(n),
+      goals,
       rewardCoins: coins,
       rewardXp: xp,
       unlocks: [],
-      requires: n > 1 ? missionId(n - 1) : undefined,
-      minLevel: MISSION_MIN_LEVEL[n] ?? n,
+      requires: prevId,
+      minLevel: Math.max(MISSION_MIN_LEVEL[n] ?? 1, reqFromGoals, n),
       chapter: chapterMeta.chapter,
       chapterTitle: chapterMeta.chapterTitle,
       npcName: chapterMeta.npcName,
       npcEmoji: chapterMeta.npcEmoji,
     })
+    prevId = id
+
+    const bridges = BRIDGE_MISSIONS_AFTER[n]
+    if (bridges) {
+      for (const bridge of bridges) {
+        const bridgeGoals = bridge.goals
+        const bridgeReq = Math.max(
+          bridge.minLevel ?? 1,
+          missionRequiredLevel(bridgeGoals),
+        )
+        missions.push({
+          ...bridge,
+          goals: bridgeGoals,
+          requires: prevId,
+          minLevel: bridgeReq,
+          rewardCoins: rewardsFor(n).coins + 15,
+          rewardXp: rewardsFor(n).xp + 8,
+          unlocks: [],
+          chapter: chapterMeta.chapter,
+          chapterTitle: chapterMeta.chapterTitle,
+          npcName: chapterMeta.npcName,
+          npcEmoji: chapterMeta.npcEmoji,
+        })
+        prevId = bridge.id
+      }
+    }
   }
   return missions
 }
@@ -668,16 +870,13 @@ export function pickNextMission(
   )
 }
 
-/** Always show a mission when the chain isn't finished — includes level-gated next. */
+/** Active mission only when player level meets all requirement unlocks. */
 export function resolveActiveMission(
   completedMissions: string[],
   playerLevel: number,
   missions: MissionDef[],
 ): MissionDef | undefined {
-  return (
-    pickNextMission(completedMissions, playerLevel, missions) ??
-    findNextMissionInChain(completedMissions, missions)
-  )
+  return pickNextMission(completedMissions, playerLevel, missions)
 }
 
 export function isMissionLevelGated(

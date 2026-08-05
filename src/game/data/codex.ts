@@ -206,7 +206,7 @@ function isItemDiscovered(itemId: ItemId, ctx: CodexContext): boolean {
     const effective = effectiveUnlocks(ctx)
     return (
       effective.includes(recipe.buildingId) &&
-      isRecipeUnlocked(recipe.id, ctx.playerLevel, ctx.activeMission)
+      isRecipeUnlocked(recipe.id, ctx.playerLevel)
     )
   }
 

@@ -56,7 +56,6 @@ import {
   isMissionLevelGated,
   resolveActiveMission,
 } from './data/missions'
-import { isRecipeRequiredByMission } from './data/missionCraftUnlock'
 import {
   DAILY_ALL_BONUS,
   DAILY_GOALS_PARENT_ID,
@@ -524,9 +523,6 @@ function ensureShipOrders(
   return {}
 }
 
-function activeMissionDef(activeMissionId: string | null): MissionDef | null {
-  return activeMissionId ? (MISSION_BY_ID[activeMissionId] ?? null) : null
-}
 
 function ensureScheduledGoals(
   playerLevel: number,
@@ -1224,11 +1220,33 @@ function migrateSaveState(
   if (version < 24) {
     state.gearRecipeCraftCount = {}
   }
-  if (version < 26) {
-    state.unlocked = syncLevelUnlocks(
-      typeof state.xp === 'number' ? state.xp : 0,
-      (state.unlocked as UnlockId[]) ?? [],
-    )
+  if (version < 28) {
+    const completed = (state.completedMissions as string[]) ?? []
+    const addCompleted = (ids: string[]) => {
+      state.completedMissions = [
+        ...new Set([...(state.completedMissions as string[]), ...ids]),
+      ]
+    }
+    const bridgesAfter7 = ['m7b_busy_bees', 'm7c_fire_side', 'm7d_cider_start']
+    const bridgesAfter9 = ['m9b_goat_trail', 'm9c_stitch_warm', 'm9d_sty_preview']
+    if (
+      completed.includes('m7_sweet_jar') &&
+      bridgesAfter7.some((id) => !completed.includes(id)) &&
+      (completed.includes('m8_hearth') ||
+        completed.includes('m9_soft_fleece') ||
+        completed.includes('m10_celebration'))
+    ) {
+      addCompleted(bridgesAfter7)
+    }
+    if (
+      completed.includes('m9_soft_fleece') &&
+      bridgesAfter9.some((id) => !completed.includes(id)) &&
+      (completed.includes('m10_celebration') ||
+        completed.includes('m11_duck_pond') ||
+        completed.includes('m12_goat_hill'))
+    ) {
+      addCompleted(bridgesAfter9)
+    }
   }
   return state
 }
@@ -2421,11 +2439,8 @@ export const useGame = create<GameState>()(
           set({ toast: 'Purchase this machine first' })
           return
         }
-        const missionCraft =
-          s.activeMissionId != null &&
-          isRecipeRequiredByMission(activeMissionDef(s.activeMissionId), recipeId)
         const needLevel = recipeUnlockLevel(recipeId)
-        if (!missionCraft && levelFromXp(s.xp) < needLevel) {
+        if (levelFromXp(s.xp) < needLevel) {
           set({ toast: `Reach Level ${needLevel} to craft this` })
           return
         }
