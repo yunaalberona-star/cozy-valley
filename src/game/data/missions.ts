@@ -121,7 +121,6 @@ export const EVENTS: EventDef[] = [
           rewardCoins: 110,
           rewardXp: 50,
           rewardItems: { cloth: 2 },
-          unlocks: ['duck_pond'],
         },
       },
     ],
@@ -173,7 +172,6 @@ export const EVENTS: EventDef[] = [
         rewards: {
           rewardCoins: 120,
           rewardXp: 55,
-          unlocks: ['jam_maker'],
         },
       },
     ],

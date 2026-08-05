@@ -1,6 +1,5 @@
 import { ANIMAL_BUILDINGS } from './animalBuildings'
 import { BUILDINGS, RECIPES } from './buildings'
-import { isRecipeRequiredByMission } from './missionCraftUnlock'
 import type { AnimalBuildingDef, BuildingDef, BuildingId, CraftResourceId, ItemId, MaterialId, MissionDef, RecipeDef, TreeProductId } from '../types'
 import { CROPS } from './crops'
 import { treeProductLevel } from './trees'
@@ -153,8 +152,14 @@ export function isRecipeUnlocked(
   playerLevel: number,
   activeMission?: MissionDef | null,
 ): boolean {
-  if (activeMission && isRecipeRequiredByMission(activeMission, recipeId)) {
-    return true
+  if (activeMission) {
+    const recipe = RECIPES.find((r) => r.id === recipeId)
+    if (recipe?.output) {
+      const craftTargets = activeMission.goals
+        .filter((g) => g.kind === 'craft' && g.target)
+        .map((g) => g.target as ItemId)
+      if (craftTargets.includes(recipe.output)) return true
+    }
   }
   return playerLevel >= recipeUnlockLevel(recipeId)
 }

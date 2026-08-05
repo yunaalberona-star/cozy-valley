@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ANIMALS } from './game/data/animals'
 import { ANIMAL_BUILDINGS } from './game/data/animalBuildings'
 import {
@@ -14,6 +14,12 @@ import {
   ORDERS_UNLOCK_LEVEL,
   queueUpgradeCost,
 } from './game/data/buildings'
+import {
+  buildCodexEntries,
+  filterCodexEntries,
+  type CodexCategory,
+  type CodexEntry,
+} from './game/data/codex'
 import { CROPS, SORTED_CROP_LIST, levelFromXp, xpProgress } from './game/data/crops'
 import {
   ADVENTURES,
@@ -600,6 +606,156 @@ function AchievementPanel({
   )
 }
 
+function CodexContent({ onAfterGo }: { onAfterGo?: () => void }) {
+  const [filter, setFilter] = useState<CodexCategory>('all')
+  const inventory = useGame((s) => s.inventory)
+  const materials = useGame((s) => s.materials)
+  const seeds = useGame((s) => s.seeds)
+  const unlocked = useGame((s) => s.unlocked)
+  const xp = useGame((s) => s.xp)
+  const activeMissionId = useGame((s) => s.activeMissionId)
+  const navigateToResource = useGame((s) => s.navigateToResource)
+  const playerLevel = levelFromXp(xp)
+  const activeMission = activeMissionId ? MISSION_BY_ID[activeMissionId] : null
+
+  const entries = useMemo(
+    () =>
+      buildCodexEntries({
+        inventory,
+        materials,
+        seeds,
+        unlocked,
+        playerLevel,
+        activeMission: activeMission ?? null,
+      }),
+    [inventory, materials, seeds, unlocked, playerLevel, activeMission],
+  )
+  const shown = filterCodexEntries(entries, filter)
+  const discoveredCount = entries.filter((e) => e.discovered).length
+
+  const goTo = (entry: CodexEntry) => {
+    navigateToResource(entry.resourceId, 1, true)
+    onAfterGo?.()
+  }
+
+  return (
+    <>
+      <p className="muted small codex-intro">
+        {discoveredCount}/{entries.length} discovered · tap <strong>Go</strong>{' '}
+        on known entries to jump to their source
+      </p>
+
+      <div className="pane-tabs pane-tabs-4 codex-tabs" role="tablist">
+        {(
+          [
+            ['all', 'All'],
+            ['crop', 'Crops'],
+            ['good', 'Goods'],
+            ['material', 'Materials'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={filter === id}
+            className={filter === id ? 'active' : ''}
+            onClick={() => setFilter(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="codex-list codex-list-inline">
+        {shown.length === 0 && (
+          <p className="muted codex-empty">Nothing in this category yet.</p>
+        )}
+        {shown.map((entry) => (
+          <div
+            key={`${entry.category}-${entry.id}`}
+            className={`codex-entry${entry.discovered ? '' : ' locked'}`}
+          >
+            <span className="codex-entry-emoji" aria-hidden>
+              {entry.discovered ? entry.emoji : '❓'}
+            </span>
+            <div className="codex-entry-body">
+              <strong>{entry.discovered ? entry.name : 'Not discovered'}</strong>
+              {entry.discovered ? (
+                <p className="muted small">{entry.source}</p>
+              ) : (
+                <p className="muted small">
+                  {entry.unlockHint ?? 'Keep playing to unlock this entry'}
+                </p>
+              )}
+            </div>
+            {entry.discovered && (
+              <button
+                type="button"
+                className="btn tiny codex-go"
+                onClick={() => goTo(entry)}
+              >
+                Go
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
+function CodexPanel({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open) return null
+
+  return (
+    <div className="popup-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="popup-card ranking-panel codex-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="codex-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ranking-panel-head">
+          <h2 id="codex-title" className="popup-title">
+            📖 Recipe Codex
+          </h2>
+          <button
+            type="button"
+            className="btn ghost ranking-close"
+            onClick={onClose}
+            aria-label="Close codex"
+          >
+            ✕
+          </button>
+        </div>
+
+        <CodexContent onAfterGo={onClose} />
+
+        <button type="button" className="btn full" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function TopBar() {
   const coins = useGame((s) => s.coins)
   const xp = useGame((s) => s.xp)
@@ -614,6 +770,7 @@ function TopBar() {
   ).length
   const [rankingOpen, setRankingOpen] = useState(false)
   const [achievementsOpen, setAchievementsOpen] = useState(false)
+  const [codexOpen, setCodexOpen] = useState(false)
   const { level, into, need } = xpProgress(xp)
   const pct = Math.min(100, (into / need) * 100)
 
@@ -636,6 +793,15 @@ function TopBar() {
           </div>
           <div className="stat-level-col">
             <div className="topbar-icon-row">
+              <button
+                type="button"
+                className="theme-toggle"
+                onClick={() => setCodexOpen(true)}
+                aria-label="Open recipe codex"
+                title="Recipe codex"
+              >
+                📖
+              </button>
               <button
                 type="button"
                 className={`theme-toggle${readyAchievements > 0 ? ' has-badge' : ''}`}
@@ -684,6 +850,7 @@ function TopBar() {
         open={achievementsOpen}
         onClose={() => setAchievementsOpen(false)}
       />
+      <CodexPanel open={codexOpen} onClose={() => setCodexOpen(false)} />
     </>
   )
 }
@@ -1756,7 +1923,7 @@ function MachinesView() {
     <div className="panel">
       <div className="panel-head">
         <h2>Machines</h2>
-        <p>Missions unlock blueprints — buy & build each machine with coins.</p>
+        <p>Machines unlock by level — buy & build each one with coins.</p>
       </div>
 
       {!open && (
@@ -1780,7 +1947,7 @@ function MachinesView() {
                   <strong className="machine-card-name">{b.name}</strong>
                   <small className="machine-card-status">
                     {blueprintLocked
-                      ? '🔒 Mission blueprint'
+                      ? `🔒 Level ${buildingUnlockLevel(b.id)}`
                       : isOwned
                         ? `Built · queue ${machineQueueCapacity(b.id)}`
                         : `Blueprint ready · build for 🪙 ${b.buyCost}`}
@@ -1980,7 +2147,7 @@ function MachinesView() {
 function AnimalsView() {
   const now = useNow()
   const animals = useGame((s) => s.animals)
-  const unlocked = useGame((s) => s.unlocked)
+  const isUnlocked = useGame((s) => s.isUnlocked)
   const guideItemHighlights = useGame((s) => s.guideItemHighlights)
   const coins = useGame((s) => s.coins)
   const inventory = useGame((s) => s.inventory)
@@ -1993,7 +2160,7 @@ function AnimalsView() {
   const animalSpeedLevel = useGame((s) => s.animalSpeedLevel)
 
   const open =
-    selectedAnimalBuilding && unlocked.includes(selectedAnimalBuilding)
+    selectedAnimalBuilding && isUnlocked(selectedAnimalBuilding)
       ? selectedAnimalBuilding
       : null
   const building = open ? ANIMAL_BUILDINGS[open] : null
@@ -2007,14 +2174,14 @@ function AnimalsView() {
         <p>
           {open
             ? 'Each building holds one species — feed with the right mix.'
-            : 'Chicken Coop, Cow Barn, Duck Pond & more — unlock via Missions.'}
+            : 'Chicken Coop, Cow Barn, Duck Pond & more — unlock as you level up.'}
         </p>
       </div>
 
       {!open && (
         <div className="machine-grid">
           {sortedAnimalBuildings().map((b) => {
-            const locked = !unlocked.includes(b.id)
+            const locked = !isUnlocked(b.id)
             const animalDef = ANIMALS[b.animalTypeId]
             const count = animals.filter((a) => a.typeId === b.animalTypeId).length
             const canBuy =
@@ -2034,7 +2201,7 @@ function AnimalsView() {
                   <strong>{b.name}</strong>
                   <small>
                     {locked
-                      ? '🔒 Mission lock'
+                      ? `🔒 Level ${buildingUnlockLevel(b.id)}`
                       : `${count}/${animalDef.maxOwned} ${animalDef.name}s · ${
                           animalDef.materialProduct
                             ? `${MATERIAL_META[animalDef.materialProduct].emoji} ${MATERIAL_META[animalDef.materialProduct].name}`
@@ -3981,7 +4148,7 @@ function MaterialsView() {
             <p className="muted">
               {machineUnlocked
                 ? `${site.machineName} yield ×${multiplier} per queue collect · ${owned}/${GATHER_SITE_MAX_SLOTS} slots`
-                : `🔒 Unlock ${site.machineName} via Missions to expand this site`}
+                : `🔒 ${site.machineName} unlocks at Level ${buildingUnlockLevel(site.machineId)}`}
             </p>
           </div>
         </div>

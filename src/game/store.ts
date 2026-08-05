@@ -56,11 +56,7 @@ import {
   isMissionLevelGated,
   resolveActiveMission,
 } from './data/missions'
-import {
-  mergeMissionBuildingUnlocks,
-  isBuildingRequiredByMission,
-  isRecipeRequiredByMission,
-} from './data/missionCraftUnlock'
+import { isRecipeRequiredByMission } from './data/missionCraftUnlock'
 import {
   DAILY_ALL_BONUS,
   DAILY_GOALS_PARENT_ID,
@@ -617,6 +613,21 @@ function ensureScheduledGoals(
 function syncLevelUnlocks(xp: number, unlocked: UnlockId[]): UnlockId[] {
   const level = levelFromXp(xp)
   return [...new Set([...unlocked, ...unlocksForLevel(level)])]
+}
+
+function unlockAvailable(
+  s: Pick<GameState, 'unlocked' | 'ownedBuildings'>,
+  id: UnlockId,
+): boolean {
+  if (s.unlocked.includes(id)) return true
+  return id in BUILDINGS && s.ownedBuildings.includes(id as BuildingId)
+}
+
+function blueprintUnlocked(
+  s: Pick<GameState, 'unlocked' | 'ownedBuildings'>,
+  buildingId: BuildingId,
+): boolean {
+  return unlockAvailable(s, buildingId)
 }
 
 function busyNpcIds(activeAdventures: ActiveAdventure[]): Set<string> {
@@ -1213,6 +1224,12 @@ function migrateSaveState(
   if (version < 24) {
     state.gearRecipeCraftCount = {}
   }
+  if (version < 26) {
+    state.unlocked = syncLevelUnlocks(
+      typeof state.xp === 'number' ? state.xp : 0,
+      (state.unlocked as UnlockId[]) ?? [],
+    )
+  }
   return state
 }
 
@@ -1700,7 +1717,7 @@ export const useGame = create<GameState>()(
         const s = get()
         if (!s.unlocked.includes(site.machineId)) {
           set({
-            toast: `Unlock ${site.machineName} first — check Missions & Machines`,
+            toast: `Reach Level ${buildingUnlockLevel(site.machineId)} to unlock ${site.machineName}`,
           })
           return
         }
@@ -1734,13 +1751,10 @@ export const useGame = create<GameState>()(
           get().guideTabPulses,
           get().contextGuideTab,
         ),
-      isUnlocked: (id) => get().unlocked.includes(id),
+      isUnlocked: (id) => unlockAvailable(get(), id),
   isBlueprintAvailable: (id) => {
     const s = get()
-    return (
-      s.unlocked.includes(id) ||
-      isBuildingRequiredByMission(activeMissionDef(s.activeMissionId), id as BuildingId)
-    )
+    return blueprintUnlocked(s, id as BuildingId)
   },
       isBuildingOwned: (id) => get().ownedBuildings.includes(id),
       isOrdersOpen: () => get().unlocked.includes('orders_board'),
@@ -1827,10 +1841,7 @@ export const useGame = create<GameState>()(
           return
         }
 
-        const machineId = machineBuildingForItem(
-          itemId,
-          mergeMissionBuildingUnlocks(s.unlocked, activeMissionDef(s.activeMissionId)),
-        )
+        const machineId = machineBuildingForItem(itemId, s.unlocked)
         if (machineId) {
           const recipe = recipeProducing(itemId)
           set({
@@ -1860,11 +1871,7 @@ export const useGame = create<GameState>()(
 
         const recipe = recipeProducing(itemId)
         if (recipe) {
-          const effective = mergeMissionBuildingUnlocks(
-            s.unlocked,
-            activeMissionDef(s.activeMissionId),
-          )
-          if (effective.includes(recipe.buildingId)) {
+          if (s.unlocked.includes(recipe.buildingId)) {
             set({
               tab: 'machines',
               selectedBuilding: recipe.buildingId,
@@ -1878,7 +1885,7 @@ export const useGame = create<GameState>()(
             return
           }
           set({
-            toast: `Unlock the ${BUILDINGS[recipe.buildingId].name} via Missions first`,
+            toast: `${BUILDINGS[recipe.buildingId].name} unlocks at Level ${buildingUnlockLevel(recipe.buildingId)}`,
           })
           return
         }
@@ -1939,7 +1946,7 @@ export const useGame = create<GameState>()(
             return
           }
           set({
-            toast: `Unlock the ${BUILDINGS[recipe.buildingId].name} via Missions first`,
+            toast: `${BUILDINGS[recipe.buildingId].name} unlocks at Level ${buildingUnlockLevel(recipe.buildingId)}`,
           })
           return
         }
@@ -1971,9 +1978,9 @@ export const useGame = create<GameState>()(
           case 'buy_animal': {
             const animal = ANIMALS[goal.target as AnimalTypeId]
             if (!animal) return
-            if (!s.unlocked.includes(animal.buildingId)) {
+            if (!unlockAvailable(s, animal.buildingId)) {
               set({
-                toast: `Unlock ${ANIMAL_BUILDINGS[animal.buildingId].name} via Missions`,
+                toast: `${ANIMAL_BUILDINGS[animal.buildingId].name} unlocks at Level ${buildingUnlockLevel(animal.buildingId)}`,
               })
               return
             }
@@ -2403,11 +2410,11 @@ export const useGame = create<GameState>()(
         const recipe = RECIPES.find((r) => r.id === recipeId)
         if (!recipe) return
         const s = get()
-        const blueprintOk =
-          s.unlocked.includes(recipe.buildingId) ||
-          isBuildingRequiredByMission(activeMissionDef(s.activeMissionId), recipe.buildingId)
+        const blueprintOk = blueprintUnlocked(s, recipe.buildingId)
         if (!blueprintOk) {
-          set({ toast: 'Machine blueprint locked — check Missions' })
+          set({
+            toast: `Reach Level ${buildingUnlockLevel(recipe.buildingId)} to unlock ${BUILDINGS[recipe.buildingId].name}`,
+          })
           return
         }
         if (!s.ownedBuildings.includes(recipe.buildingId)) {
@@ -2515,10 +2522,7 @@ export const useGame = create<GameState>()(
         const building = BUILDINGS[id]
         if (!building) return
         const s = get()
-        if (
-          !s.unlocked.includes(id) &&
-          !isBuildingRequiredByMission(activeMissionDef(s.activeMissionId), id)
-        ) {
+        if (!blueprintUnlocked(s, id)) {
           set({ toast: 'Blueprint locked — level up to unlock' })
           return
         }
@@ -2644,8 +2648,10 @@ export const useGame = create<GameState>()(
         const def = ANIMALS[typeId]
         if (!def) return
         const s = get()
-        if (!s.unlocked.includes(def.buildingId)) {
-          set({ toast: `${def.name} building locked — check Missions` })
+        if (!unlockAvailable(s, def.buildingId)) {
+          set({
+            toast: `${def.name} unlocks at Level ${buildingUnlockLevel(def.buildingId)}`,
+          })
           return
         }
         const owned = s.animals.filter((a) => a.typeId === typeId).length
