@@ -17,18 +17,22 @@ export type CropId =
   | 'pepper'
   | 'lavender'
   | 'rice'
-  | 'apple'
   | 'melon'
   | 'chili'
   | 'basil'
   | 'beet'
   | 'cabbage'
-  | 'peach'
   | 'mint'
   | 'eggplant'
 
 /** Harvested from orchard trees — not sold as plot seeds. */
-export type TreeProductId = 'orange' | 'cherry' | 'maple_sap' | 'lemon'
+export type TreeProductId =
+  | 'apple'
+  | 'orange'
+  | 'cherry'
+  | 'maple_sap'
+  | 'peach'
+  | 'lemon'
 
 export type TreeId =
   | 'apple_tree'
@@ -361,6 +365,8 @@ export interface MissionDef {
   /** Narrator for story missions */
   npcName?: string
   npcEmoji?: string
+  /** Side quests that run alongside the story chain (tavern / expeditions). */
+  parallel?: boolean
 }
 
 export interface EventStageReward {

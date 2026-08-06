@@ -48,7 +48,7 @@ export interface ScheduledGoalSlot {
   claimed: boolean
 }
 
-const DAILY_POOL: GoalTemplate[] = [
+export const DAILY_POOL: GoalTemplate[] = [
   {
     id: 'daily_harvest_wheat',
     kind: 'harvest',
@@ -178,7 +178,7 @@ const DAILY_POOL: GoalTemplate[] = [
   },
 ]
 
-const WEEKLY_POOL: GoalTemplate[] = [
+export const WEEKLY_POOL: GoalTemplate[] = [
   {
     id: 'weekly_harvest_wheat',
     kind: 'harvest',
@@ -330,9 +330,9 @@ const WEEKLY_POOL: GoalTemplate[] = [
   {
     id: 'weekly_gather_iron',
     kind: 'gather_material',
-    target: 'iron',
+    target: 'iron_ore',
     amount: 50,
-    label: 'Gather 50 Iron',
+    label: 'Gather 50 Iron Ore',
     minLevel: 12,
     rewardCoins: 430,
     rewardXp: 175,

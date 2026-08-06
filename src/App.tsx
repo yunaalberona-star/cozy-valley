@@ -173,6 +173,7 @@ import {
   type GearSlot,
   type ItemId,
   type MaterialId,
+  type MissionDef,
   type TabId,
 } from './game/types'
 import './App.css'
@@ -615,10 +616,16 @@ function CodexContent({ onAfterGo }: { onAfterGo?: () => void }) {
   const seeds = useGame((s) => s.seeds)
   const unlocked = useGame((s) => s.unlocked)
   const xp = useGame((s) => s.xp)
-  const activeMissionId = useGame((s) => s.activeMissionId)
+  const activeMissionIds = useGame((s) => s.activeMissionIds)
   const navigateToResource = useGame((s) => s.navigateToResource)
   const playerLevel = levelFromXp(xp)
-  const activeMission = activeMissionId ? MISSION_BY_ID[activeMissionId] : null
+  const activeMission = useMemo(() => {
+    for (const id of activeMissionIds) {
+      const m = MISSION_BY_ID[id]
+      if (m && !m.parallel) return m
+    }
+    return null
+  }, [activeMissionIds])
 
   const entries = useMemo(
     () =>
@@ -876,7 +883,11 @@ function CelebrationPopup() {
   const claimMission = useGame((s) => s.claimMission)
 
   const handleClaim = () => {
-    claimMission()
+    if (popup?.kind === 'mission_claim' && popup.missionId) {
+      claimMission(popup.missionId)
+    } else {
+      claimMission()
+    }
   }
 
   const handleDismiss = () => {
@@ -1004,82 +1015,143 @@ function GoalList({
   )
 }
 
+function ActiveMissionCard({
+  mission,
+  missionProgress,
+  playerLevel,
+  claimMission,
+  isActive,
+}: {
+  mission: MissionDef
+  missionProgress: Record<string, number>
+  playerLevel: number
+  claimMission: (missionId?: string) => void
+  isActive: boolean
+}) {
+  const levelGated = isMissionLevelGated(mission, playerLevel)
+  const missionDone =
+    isActive &&
+    mission.goals.every(
+      (g) => missionGoalProgress(missionProgress, mission.id, g.id) >= g.amount,
+    )
+
+  return (
+    <div className={`recipe-card highlight${levelGated ? ' level-gated' : ''}`}>
+      <div className="recipe-top">
+        <span className="big-emoji">{mission.emoji}</span>
+        <div>
+          <strong>{mission.name}</strong>
+          <p className="muted">{mission.story}</p>
+        </div>
+      </div>
+      {levelGated && isActive ? (
+        <p className="level-gate-msg">
+          🔒 Reach Level {mission.minLevel} to claim rewards. Goals still track
+          while you level up!
+        </p>
+      ) : null}
+      {!isActive ? (
+        <p className="level-gate-msg">
+          🔒 Reach Level {mission.minLevel} to begin this mission. Keep farming
+          and crafting to level up!
+        </p>
+      ) : (
+        <>
+          <GoalList
+            goals={mission.goals}
+            parentId={mission.id}
+            progress={missionProgress}
+          />
+          <p className="unlock-line">
+            Reward: 🪙 {mission.rewardCoins} · ⭐ {mission.rewardXp} XP
+          </p>
+          <button
+            type="button"
+            className="btn full"
+            disabled={!missionDone || levelGated}
+            onClick={() => claimMission(mission.id)}
+          >
+            {levelGated
+              ? `Reach Level ${mission.minLevel} to claim`
+              : missionDone
+                ? `Claim · 🪙 ${mission.rewardCoins}`
+                : 'In progress…'}
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 function StoryMissionsPane() {
   const xp = useGame((s) => s.xp)
-  const activeMissionId = useGame((s) => s.activeMissionId)
+  const activeMissionIds = useGame((s) => s.activeMissionIds)
   const missionProgress = useGame((s) => s.missionProgress)
   const completedMissions = useGame((s) => s.completedMissions)
   const claimMission = useGame((s) => s.claimMission)
   const playerLevel = levelFromXp(xp)
 
-  const mission = activeMissionId ? MISSION_BY_ID[activeMissionId] : null
-  const nextInChain = !mission
+  const activeStoryId = activeMissionIds.find(
+    (id) => MISSION_BY_ID[id] && !MISSION_BY_ID[id]!.parallel,
+  )
+  const activeStory = activeStoryId ? MISSION_BY_ID[activeStoryId] : null
+  const sideMissions = activeMissionIds
+    .map((id) => MISSION_BY_ID[id])
+    .filter((m): m is MissionDef => m != null && !!m.parallel)
+  const nextInChain = !activeStory
     ? findNextMissionInChain(completedMissions, MISSIONS)
     : null
-  const displayMission = mission ?? nextInChain
-  const levelGated = displayMission
-    ? isMissionLevelGated(displayMission, playerLevel)
-    : false
-  const missionDone =
-    mission &&
-    !levelGated &&
-    mission.goals.every(
-      (g) =>
-        missionGoalProgress(missionProgress, mission.id, g.id) >= g.amount,
-    )
-  const allComplete = completedMissions.length >= MISSIONS.length && !mission
+  const displayStory = activeStory ?? nextInChain
+  const allComplete =
+    activeMissionIds.length === 0 &&
+    !findNextMissionInChain(completedMissions, MISSIONS)
 
   return (
     <>
-      {displayMission ? (
+      {displayStory ? (
         <>
           <p className="chapter-label">
-            {displayMission.chapterTitle}
-            {displayMission.npcEmoji && displayMission.npcName ? (
-              <span className="muted"> · {displayMission.npcEmoji} {displayMission.npcName}</span>
+            {displayStory.chapterTitle}
+            {displayStory.npcEmoji && displayStory.npcName ? (
+              <span className="muted">
+                {' '}
+                · {displayStory.npcEmoji} {displayStory.npcName}
+              </span>
             ) : null}
           </p>
-          <div className={`recipe-card highlight${levelGated ? ' level-gated' : ''}`}>
-            <div className="recipe-top">
-              <span className="big-emoji">{displayMission.emoji}</span>
-              <div>
-                <strong>{displayMission.name}</strong>
-                <p className="muted">{displayMission.story}</p>
-              </div>
-            </div>
-            {levelGated || !mission ? (
-              <p className="level-gate-msg">
-                🔒 Reach Level {displayMission.minLevel} to begin this mission.
-                Keep farming and crafting to level up!
-              </p>
-            ) : (
-              <>
-                <GoalList
-                  goals={mission.goals}
-                  parentId={mission.id}
-                  progress={missionProgress}
-                />
-                <p className="unlock-line">
-                  Reward: 🪙 {mission.rewardCoins} · ⭐ {mission.rewardXp} XP
-                </p>
-                <button
-                  type="button"
-                  className="btn full"
-                  disabled={!missionDone}
-                  onClick={claimMission}
-                >
-                  {missionDone
-                    ? `Claim · 🪙 ${mission.rewardCoins}`
-                    : 'In progress…'}
-                </button>
-              </>
-            )}
-          </div>
+          <ActiveMissionCard
+            mission={displayStory}
+            missionProgress={missionProgress}
+            playerLevel={playerLevel}
+            claimMission={claimMission}
+            isActive={!!activeStory}
+          />
         </>
       ) : allComplete ? (
-        <p className="muted pad">All {MISSIONS.length} story missions complete. Nice work!</p>
+        <p className="muted pad">
+          All {MISSIONS.length} story missions complete. Nice work!
+        </p>
       ) : (
         <p className="muted pad">Loading missions…</p>
+      )}
+
+      {sideMissions.length > 0 && (
+        <>
+          <p className="chapter-label pad">
+            Side · Expedition Board
+            <span className="muted"> · 🗺️ Scout Mira</span>
+          </p>
+          {sideMissions.map((mission) => (
+            <ActiveMissionCard
+              key={mission.id}
+              mission={mission}
+              missionProgress={missionProgress}
+              playerLevel={playerLevel}
+              claimMission={claimMission}
+              isActive
+            />
+          ))}
+        </>
       )}
 
       {completedMissions.length > 0 && (

@@ -32,9 +32,9 @@ function inputItemLevel(
   craftedLevels: Partial<Record<ItemId, number>>,
 ): number {
   if (id in MATERIAL_LEVEL) return MATERIAL_LEVEL[id as MaterialId] ?? 99
-  if (id in CROPS) return CROPS[id as keyof typeof CROPS].unlockLevel
   const treeLevel = treeProductLevel(id as TreeProductId)
   if (treeLevel < 99) return treeLevel
+  if (id in CROPS) return CROPS[id as keyof typeof CROPS].unlockLevel
   if (ANIMAL_PRODUCT_LEVEL[id as ItemId] != null) {
     return ANIMAL_PRODUCT_LEVEL[id as ItemId]!
   }

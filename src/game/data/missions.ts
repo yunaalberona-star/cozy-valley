@@ -3,6 +3,7 @@ import {
   buildMissionChain,
   pickNextMission,
   resolveActiveMission,
+  resolveActiveMissionIds,
   isMissionLevelGated,
   findNextMissionInChain,
 } from './missionChain'
@@ -18,6 +19,7 @@ export const MISSION_BY_ID = Object.fromEntries(MISSIONS.map((m) => [m.id, m]))
 export {
   pickNextMission,
   resolveActiveMission,
+  resolveActiveMissionIds,
   isMissionLevelGated,
   findNextMissionInChain,
 }

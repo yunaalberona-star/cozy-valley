@@ -182,16 +182,6 @@ export const CROPS: Record<CropId, CropDef> = {
     xp: 16,
     unlockLevel: 21,
   },
-  apple: {
-    id: 'apple',
-    name: 'Apple',
-    emoji: '🍎',
-    seedCost: 26,
-    growMs: 55_000,
-    harvestQty: 3,
-    xp: 17,
-    unlockLevel: 24,
-  },
   melon: {
     id: 'melon',
     name: 'Melon',
@@ -241,16 +231,6 @@ export const CROPS: Record<CropId, CropDef> = {
     harvestQty: 2,
     xp: 22,
     unlockLevel: 39,
-  },
-  peach: {
-    id: 'peach',
-    name: 'Peach',
-    emoji: '🍑',
-    seedCost: 38,
-    growMs: 78_000,
-    harvestQty: 3,
-    xp: 24,
-    unlockLevel: 42,
   },
   mint: {
     id: 'mint',

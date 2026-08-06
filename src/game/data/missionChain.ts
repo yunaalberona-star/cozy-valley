@@ -4,7 +4,7 @@ import { ITEM_META, ORDERS_UNLOCK_LEVEL, RECIPES } from './buildings'
 import { CROP_LIST, CROPS } from './crops'
 import { GEAR_BLUEPRINTS, MATERIAL_META } from './gear'
 import { GATHER_SITES } from './gatherSites'
-import { gatherSiteForMaterial } from './itemSources'
+import { gatherSiteForMaterial, adventureRewardsMaterial } from './itemSources'
 import { buildingUnlockLevel } from './levelUnlocks'
 import { NPCS } from './npcs'
 import { TREE_LIST, treeForProduct, TREES } from './trees'
@@ -62,10 +62,10 @@ const MISSION_STORIES: Record<number, string> = {
   5: 'The bakery bell rings. Bake bread and churn cheese for hungry neighbors.',
   6: 'Market day! Run the Juice Press and fulfill your first board order.',
   7: 'Sugarcane sways in the breeze. Refine sugar and cook berry jam for the fair.',
-  8: 'Fire up the Kitchen and Grill — hearty meals keep the valley smiling.',
+  8: 'Fire up the bakery — pie and cheese for hungry neighbors.',
   9: 'Soft fleece season! Tend sheep and bees, then weave cloth on the Loom.',
-  10: 'The valley fair is near. Sew a sweater, bottle wine, and save up coins.',
-  11: 'Ducks splash at the pond. Raise ducks and mix duck feed for extra eggs.',
+  10: 'The valley fair is near. Stock jam, fill orders, and save up coins.',
+  11: 'Ducks splash at the pond. Mix duck feed and gather eggs for the market.',
   12: 'Bull Pen opens on the ridge. Tend bulls, gather hides, and churn butter for the café.',
   13: 'Smoke rises from the kitchen. Hearty soup and grilled sides for hungry travelers.',
   14: 'Master Chef week! Candy, cake, pie — and keep the order board busy.',
@@ -401,7 +401,7 @@ function goalsForMission(n: number): MissionGoal[] {
       goalCraft('jam', 1),
     ]
   }
-  if (n === 8) return [goalCraft('salad', 1), goalCraft('grilled_veg', 1)]
+  if (n === 8) return [goalCraft('pie', 1), goalCraft('cheese', 2)]
   if (n === 9) {
     return [
       goalBuy('sheep', 1),
@@ -412,16 +412,17 @@ function goalsForMission(n: number): MissionGoal[] {
   }
   if (n === 10) {
     return [
-      goalCraft('sweater', 1),
-      goalCraft('wine', 1),
-      goalCoins(200),
+      goalCraft('jam', 2),
+      goalOrder(2),
+      goalCoins(250),
     ]
   }
   if (n === 11) {
     return [
       goalBuy('duck', 1),
-      goalCollect('egg', 4),
-      goalCraft('duck_feed', 2),
+      goalCraft('duck_feed', 3),
+      goalCollect('egg', 6),
+      goalOrder(1),
     ]
   }
   if (n === 12) {
@@ -533,7 +534,9 @@ function goalsForMission(n: number): MissionGoal[] {
   const collectAmt = 2 + Math.floor(n / 10)
   const orderAmt = 1 + Math.floor(n / 20)
 
+  const adventurePool = adventuresUnlockedBy(n)
   const adventure =
+    adventurePool[(n - 1) % Math.max(1, adventurePool.length)] ??
     ADVENTURE_ROTATION[(n - 1) % ADVENTURE_ROTATION.length]!
   const material =
     MATERIAL_ROTATION[(n - 1) % MATERIAL_ROTATION.length]!
@@ -564,7 +567,7 @@ function goalsForMission(n: number): MissionGoal[] {
     return goals
   }
   if (mode === 3) {
-    const goals: MissionGoal[] = [goalAdventure(adventure, adventureAmt)]
+    const goals: MissionGoal[] = [goalAdventure(adventure.id, adventureAmt)]
     if (n >= 28) goals.push(goalGatherMaterial(material, gatherAmt))
     return goals
   }
@@ -607,40 +610,123 @@ const BRIDGE_MISSIONS_AFTER: Record<
       minLevel: 15,
       goals: [goalHarvest('apple', 6), goalCraft('apple_cider', 1)],
     },
-  ],
-  9: [
     {
-      id: 'm9b_goat_trail',
-      name: 'Goat Trail',
+      id: 'm7e_kitchen_garden',
+      name: 'Kitchen Garden',
+      emoji: '🥗',
+      story: 'Chef Eli needs fresh salads for the lunch rush.',
+      minLevel: 16,
+      goals: [goalCraft('salad', 2)],
+    },
+    {
+      id: 'm7f_fluffy_friends',
+      name: 'Fluffy Friends',
+      emoji: '🐰',
+      story: 'Rabbits hop into the hutch — gather soft pelts for the tailor.',
+      minLevel: 16,
+      goals: [goalBuy('rabbit', 1), goalOwnMaterial('rabbit_pelt', 1)],
+    },
+    {
+      id: 'm7g_duck_splash',
+      name: 'Duck Splash',
+      emoji: '🦆',
+      story: 'The duck pond opens! Collect extra eggs for the market.',
+      minLevel: 17,
+      goals: [goalBuy('duck', 1), goalCollect('egg', 4)],
+    },
+    {
+      id: 'm7h_bull_strength',
+      name: 'Bull Strength',
+      emoji: '🐂',
+      story: 'Bulls power the ridge pen. Gather hides for the tannery.',
+      minLevel: 17,
+      goals: [goalBuy('bull', 1), goalOwnMaterial('cow_hide', 2)],
+    },
+    {
+      id: 'm7i_loom_song',
+      name: 'Loom Song',
+      emoji: '🧵',
+      story: 'The loom hums. Spin wool into cloth for valley traders.',
+      minLevel: 18,
+      goals: [goalCraft('cloth', 2)],
+    },
+    {
+      id: 'm7j_goat_milk',
+      name: 'Goat Milk Run',
       emoji: '🐐',
-      story:
-        'Goats clip-clop up the hillside. Fresh milk and churned butter for the café.',
+      story: 'Goats climb the hill. Churn butter for the hillside café.',
       minLevel: 19,
       goals: [
         goalBuy('goat', 1),
-        goalCollect('goat_milk', 2),
+        goalCollect('goat_milk', 3),
         goalCraft('butter', 1),
       ],
     },
     {
-      id: 'm9c_stitch_warm',
-      name: 'Stitch Warm',
+      id: 'm7k_stitch_fair',
+      name: 'Stitch for Fair',
       emoji: '🧥',
-      story:
-        'The sewing room opens. Weave wool into a cozy sweater for the fair.',
+      story: 'Sew warm sweaters before the festival chills set in.',
       minLevel: 20,
       goals: [goalCraft('sweater', 1)],
     },
     {
-      id: 'm9d_sty_preview',
-      name: 'Sty Preview',
+      id: 'm7l_pig_pen',
+      name: 'Pig Pen',
       emoji: '🐷',
-      story:
-        'Pigs root in the pen. Collect bacon and keep the smokehouse busy.',
+      story: 'Pigs snuffle in the sty. Smoke bacon for the kitchen.',
       minLevel: 21,
-      goals: [goalBuy('pig', 1), goalCollect('bacon', 2)],
+      goals: [goalBuy('pig', 1), goalCollect('bacon', 3)],
+    },
+    {
+      id: 'm7m_valley_wine',
+      name: 'Valley Wine',
+      emoji: '🍷',
+      story: 'The winery opens. Bottle your first valley vintage.',
+      minLevel: 22,
+      goals: [goalCraft('wine', 1)],
+    },
+    {
+      id: 'm7n_maple_sweet',
+      name: 'Maple Sweet',
+      emoji: '🍁',
+      story: 'Tap maple trees and boil sap into golden syrup.',
+      minLevel: 23,
+      goals: [goalHarvest('maple_sap', 8), goalCraft('maple_syrup', 1)],
     },
   ],
+}
+
+function adventuresUnlockedBy(level: number) {
+  return ADVENTURES.filter((a) => a.unlockLevel <= level)
+}
+
+function materialRequiredLevel(materialId: MaterialId): number {
+  const levels: number[] = []
+  const animal = Object.values(ANIMALS).find((a) => a.materialProduct === materialId)
+  if (animal) {
+    levels.push(buildingUnlockLevel(animal.buildingId))
+  }
+  const site = gatherSiteForMaterial(materialId)
+  if (site) {
+    levels.push(buildingUnlockLevel(GATHER_SITES[site].machineId))
+  }
+  const recipe = RECIPES.find((r) => r.materialOutput === materialId)
+  if (recipe) {
+    levels.push(
+      Math.max(
+        buildingUnlockLevel(recipe.buildingId),
+        recipeUnlockLevel(recipe.id),
+      ),
+    )
+  }
+  if (adventureRewardsMaterial(materialId)) {
+    const advLevels = ADVENTURES.filter(
+      (a) => (a.rewardMaterials?.[materialId] ?? 0) > 0,
+    ).map((a) => a.unlockLevel)
+    levels.push(...advLevels)
+  }
+  return levels.length > 0 ? Math.min(...levels) : 99
 }
 
 function collectAnimalRequiredLevel(
@@ -673,11 +759,9 @@ export function missionRequiredLevel(goals: MissionGoal[]): number {
     switch (goal.kind) {
       case 'harvest': {
         const id = goal.target as ItemId
-        if (id in CROPS) need = CROPS[id as keyof typeof CROPS].unlockLevel
-        else {
-          const treeId = treeForProduct(id)
-          if (treeId) need = TREES[treeId].unlockLevel
-        }
+        const treeId = treeForProduct(id)
+        if (treeId) need = TREES[treeId].unlockLevel
+        else if (id in CROPS) need = CROPS[id as keyof typeof CROPS].unlockLevel
         break
       }
       case 'craft': {
@@ -703,16 +787,7 @@ export function missionRequiredLevel(goals: MissionGoal[]): number {
         break
       case 'gather_material': {
         const materialId = goal.target as MaterialId
-        const site = gatherSiteForMaterial(materialId)
-        if (site) need = buildingUnlockLevel(GATHER_SITES[site].machineId)
-        const recipe = RECIPES.find((r) => r.materialOutput === materialId)
-        if (recipe) {
-          need = Math.max(
-            need,
-            buildingUnlockLevel(recipe.buildingId),
-            recipeUnlockLevel(recipe.id),
-          )
-        }
+        need = materialRequiredLevel(materialId)
         break
       }
       case 'craft_gear': {
@@ -731,7 +806,7 @@ export function missionRequiredLevel(goals: MissionGoal[]): number {
         break
       case 'own_material':
         if (goal.target) {
-          need = buildingUnlockLevel('miner')
+          need = materialRequiredLevel(goal.target as MaterialId)
         }
         break
       default:
@@ -788,6 +863,151 @@ function rewardsFor(n: number): { coins: number; xp: number } {
   }
 }
 
+const ADVENTURE_SIDE_CHAPTER = {
+  chapter: 7,
+  chapterTitle: 'Side · Expedition Board',
+  npcName: 'Scout Mira',
+  npcEmoji: '🗺️',
+}
+
+/** Parallel tavern / expedition quests — active alongside story missions from L15. */
+function buildAdventureSideMissions(): MissionDef[] {
+  const side = {
+    parallel: true,
+    requires: 'm7_sweet_jar',
+    unlocks: [] as MissionDef['unlocks'],
+    ...ADVENTURE_SIDE_CHAPTER,
+  }
+  return [
+    {
+      id: 'advq15_recruit',
+      name: 'Tavern Call',
+      emoji: '🍺',
+      story:
+        'The tavern doors swing open. Recruit your first adventurer from the bar.',
+      minLevel: 15,
+      goals: [goalRecruit(1)],
+      rewardCoins: 70,
+      rewardXp: 30,
+      ...side,
+    },
+    {
+      id: 'advq15_meadow',
+      name: 'Sunny Stroll',
+      emoji: '🌼',
+      story: 'Send a party to the Sunny Meadow for leather and coins.',
+      minLevel: 15,
+      goals: [goalAdventure('adv_meadow', 1)],
+      rewardCoins: 85,
+      rewardXp: 35,
+      ...side,
+    },
+    {
+      id: 'advq15_forest',
+      name: 'Forest Path',
+      emoji: '🌲',
+      story: 'The Whispering Forest hides berries and timber — march a party in.',
+      minLevel: 15,
+      goals: [
+        goalAdventure('adv_forest', 1),
+        goalGatherMaterial('timber', 4),
+      ],
+      rewardCoins: 95,
+      rewardXp: 40,
+      ...side,
+    },
+    {
+      id: 'advq15_ore',
+      name: 'Ore Samples',
+      emoji: '⛏️',
+      story: 'Wallace wants ore samples before he forges your first tool.',
+      minLevel: 15,
+      goals: [goalGatherMaterial('iron_ore', 4)],
+      rewardCoins: 80,
+      rewardXp: 32,
+      ...side,
+    },
+    {
+      id: 'advq16_caves',
+      name: 'Cave Crawl',
+      emoji: '🪨',
+      story: 'Misty Caves echo with pickaxes. A geared party can bring ore home.',
+      minLevel: 16,
+      goals: [
+        goalAdventure('adv_caves', 1),
+        goalGatherMaterial('iron_ore', 6),
+      ],
+      rewardCoins: 110,
+      rewardXp: 45,
+      ...side,
+    },
+    {
+      id: 'advq17_ruins',
+      name: 'Ruins & Runes',
+      emoji: '🏛️',
+      story: 'Ancient walls still hold treasure. Explore the Valley Ruins.',
+      minLevel: 17,
+      goals: [goalAdventure('adv_ruins', 1)],
+      rewardCoins: 120,
+      rewardXp: 50,
+      ...side,
+    },
+    {
+      id: 'advq18_ridge',
+      name: "Dragon's Ridge",
+      emoji: '🐉',
+      story: 'Only the bravest parties return rich from the ridge.',
+      minLevel: 18,
+      goals: [goalAdventure('adv_ridge', 1)],
+      rewardCoins: 140,
+      rewardXp: 55,
+      ...side,
+    },
+    {
+      id: 'advq20_swamp',
+      name: 'Gloom Swamp',
+      emoji: '🌫️',
+      story: 'Mire witches guard rare reagents — send a strong party.',
+      minLevel: 20,
+      goals: [
+        goalAdventure('adv_swamp', 1),
+        goalOwnMaterial('magic_essence', 1),
+      ],
+      rewardCoins: 160,
+      rewardXp: 65,
+      ...side,
+    },
+    {
+      id: 'advq22_gear',
+      name: 'Field Kit',
+      emoji: '⚔️',
+      story: 'Craft a piece of gear and test it on an expedition.',
+      minLevel: 22,
+      goals: [
+        goalCraftGear('bp_wood_pitchfork', 1),
+        goalAdventure('adv_forest', 1),
+      ],
+      rewardCoins: 150,
+      rewardXp: 60,
+      ...side,
+    },
+    {
+      id: 'advq25_peak',
+      name: 'Frost Peak',
+      emoji: '🏔️',
+      story: 'Ice caves glitter with sunstone. Only veterans should climb.',
+      minLevel: 25,
+      goals: [
+        goalAdventure('adv_peak', 1),
+        goalOwnMaterial('sunstone', 1),
+      ],
+      rewardCoins: 200,
+      rewardXp: 80,
+      ...side,
+    },
+  ]
+}
+
 export function buildMissionChain(maxLevel = 50): MissionDef[] {
   const missions: MissionDef[] = []
   let prevId: string | undefined
@@ -841,7 +1061,7 @@ export function buildMissionChain(maxLevel = 50): MissionDef[] {
       }
     }
   }
-  return missions
+  return [...missions, ...buildAdventureSideMissions()]
 }
 
 /** First incomplete mission in chain (ignores level gate). */
@@ -851,12 +1071,13 @@ export function findNextMissionInChain(
 ): MissionDef | undefined {
   return missions.find(
     (m) =>
+      !m.parallel &&
       !completedMissions.includes(m.id) &&
       (!m.requires || completedMissions.includes(m.requires)),
   )
 }
 
-/** Next mission the player can actively work on (level + chain satisfied). */
+/** Next story mission the player can work on (level + chain satisfied). */
 export function pickNextMission(
   completedMissions: string[],
   playerLevel: number,
@@ -864,19 +1085,51 @@ export function pickNextMission(
 ): MissionDef | undefined {
   return missions.find(
     (m) =>
+      !m.parallel &&
       !completedMissions.includes(m.id) &&
       (!m.requires || completedMissions.includes(m.requires)) &&
       (m.minLevel ?? 1) <= playerLevel,
   )
 }
 
-/** Active mission only when player level meets all requirement unlocks. */
+function missionRequirementsMet(
+  mission: MissionDef,
+  completedMissions: string[],
+  playerLevel: number,
+): boolean {
+  if (completedMissions.includes(mission.id)) return false
+  if ((mission.minLevel ?? 1) > playerLevel) return false
+  if (mission.requires && !completedMissions.includes(mission.requires)) return false
+  return true
+}
+
+/** All missions active at once: one story mission + every eligible side quest. */
+export function resolveActiveMissionIds(
+  completedMissions: string[],
+  playerLevel: number,
+  missions: MissionDef[],
+): string[] {
+  const ids: string[] = []
+  const story =
+    pickNextMission(completedMissions, playerLevel, missions) ??
+    findNextMissionInChain(completedMissions, missions)
+  if (story && !story.parallel) ids.push(story.id)
+  for (const m of missions) {
+    if (!m.parallel) continue
+    if (!missionRequirementsMet(m, completedMissions, playerLevel)) continue
+    ids.push(m.id)
+  }
+  return ids
+}
+
+/** @deprecated use resolveActiveMissionIds */
 export function resolveActiveMission(
   completedMissions: string[],
   playerLevel: number,
   missions: MissionDef[],
 ): MissionDef | undefined {
-  return pickNextMission(completedMissions, playerLevel, missions)
+  const story = pickNextMission(completedMissions, playerLevel, missions)
+  return story
 }
 
 export function isMissionLevelGated(

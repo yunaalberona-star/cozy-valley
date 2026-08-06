@@ -66,7 +66,7 @@ export const TREES: Record<TreeId, TreeDef> = {
     harvestQty: 4,
     product: 'lemon',
     xp: 15,
-    unlockLevel: 28,
+    unlockLevel: 18,
   },
 }
 

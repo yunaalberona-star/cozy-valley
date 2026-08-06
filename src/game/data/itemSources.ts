@@ -2,6 +2,7 @@ import { ADVENTURES } from './adventures'
 import { ANIMAL_LIST } from './animals'
 import { RECIPES } from './buildings'
 import { CROPS } from './crops'
+import { isTreeProduct } from './trees'
 import type {
   AnimalBuildingId,
   BuildingId,
@@ -13,7 +14,7 @@ import type {
 } from '../types'
 
 export function isCropItem(id: ItemId): id is CropId {
-  return id in CROPS
+  return id in CROPS && !isTreeProduct(id)
 }
 
 export function recipeProducing(itemId: ItemId): RecipeDef | undefined {

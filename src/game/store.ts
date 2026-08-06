@@ -54,7 +54,7 @@ import {
   eventStageGoals,
   eventStageParentId,
   isMissionLevelGated,
-  resolveActiveMission,
+  resolveActiveMissionIds,
 } from './data/missions'
 import {
   DAILY_ALL_BONUS,
@@ -718,24 +718,26 @@ function missionClaimPopup(mission: MissionDef): PopupState {
 }
 
 function queueMissionClaimIfReady(
-  activeMissionId: string | null,
-  beforeProgress: Record<string, number>,
+  missionId: string,
   afterProgress: Record<string, number>,
   popupQueue: PopupState[],
 ): PopupState[] {
-  if (!activeMissionId) return popupQueue
-  const mission = MISSION_BY_ID[activeMissionId]
+  const mission = MISSION_BY_ID[missionId]
   if (!mission) return popupQueue
-  if (isMissionComplete(activeMissionId, beforeProgress)) return popupQueue
-  if (!isMissionComplete(activeMissionId, afterProgress)) return popupQueue
-  if (popupQueue.some((p) => p.kind === 'mission_claim')) return popupQueue
-  const filtered = popupQueue.filter((p) => p.kind !== 'mission_claim')
-  return [missionClaimPopup(mission), ...filtered]
+  if (!isMissionComplete(missionId, afterProgress)) return popupQueue
+  if (
+    popupQueue.some(
+      (p) => p.kind === 'mission_claim' && p.missionId === missionId,
+    )
+  ) {
+    return popupQueue
+  }
+  return [missionClaimPopup(mission), ...popupQueue]
 }
 
 type MissionProgressSlice = Pick<
   GameState,
-  | 'activeMissionId'
+  | 'activeMissionIds'
   | 'missionProgress'
   | 'popupQueue'
   | 'inventory'
@@ -743,7 +745,47 @@ type MissionProgressSlice = Pick<
   | 'animals'
   | 'materials'
   | 'recruitedNpcs'
+  | 'xp'
 >
+
+function resolveMissionProgress(
+  s: MissionProgressSlice,
+  bumpedProgress?: Record<string, number>,
+): Pick<GameState, 'missionProgress' | 'popupQueue'> {
+  if (s.activeMissionIds.length === 0) {
+    return {
+      missionProgress: bumpedProgress ?? s.missionProgress,
+      popupQueue: s.popupQueue,
+    }
+  }
+  let missionProgress = bumpedProgress ?? s.missionProgress
+  let popupQueue = s.popupQueue
+  for (const missionId of s.activeMissionIds) {
+    const before = missionProgress
+    missionProgress = computeMissionProgressFromState(
+      { ...s, missionProgress },
+      missionId,
+    )
+    const wasComplete = isMissionComplete(missionId, before)
+    const nowComplete = isMissionComplete(missionId, missionProgress)
+    const mission = MISSION_BY_ID[missionId]
+    const playerLevel = levelFromXp(s.xp)
+    const canClaim =
+      mission != null && !isMissionLevelGated(mission, playerLevel)
+    if (wasComplete && !nowComplete) {
+      popupQueue = popupQueue.filter(
+        (p) => !(p.kind === 'mission_claim' && p.missionId === missionId),
+      )
+    } else if (nowComplete && canClaim) {
+      popupQueue = queueMissionClaimIfReady(
+        missionId,
+        missionProgress,
+        popupQueue,
+      )
+    }
+  }
+  return { missionProgress, popupQueue }
+}
 
 function computeMissionProgressFromState(
   s: Pick<
@@ -807,36 +849,6 @@ function computeMissionProgressFromState(
   return next
 }
 
-function resolveMissionProgress(
-  s: MissionProgressSlice,
-  bumpedProgress?: Record<string, number>,
-): Pick<GameState, 'missionProgress' | 'popupQueue'> {
-  if (!s.activeMissionId) {
-    return {
-      missionProgress: bumpedProgress ?? s.missionProgress,
-      popupQueue: s.popupQueue,
-    }
-  }
-  const missionProgress = computeMissionProgressFromState(
-    { ...s, missionProgress: bumpedProgress ?? s.missionProgress },
-    s.activeMissionId,
-  )
-  const wasComplete = isMissionComplete(s.activeMissionId, s.missionProgress)
-  const nowComplete = isMissionComplete(s.activeMissionId, missionProgress)
-  let popupQueue = s.popupQueue
-  if (wasComplete && !nowComplete) {
-    popupQueue = popupQueue.filter((p) => p.kind !== 'mission_claim')
-  } else if (!wasComplete && nowComplete) {
-    popupQueue = queueMissionClaimIfReady(
-      s.activeMissionId,
-      s.missionProgress,
-      missionProgress,
-      popupQueue,
-    )
-  }
-  return { missionProgress, popupQueue }
-}
-
 function withMissionProgress<T extends MissionProgressSlice>(
   s: T,
   patch: Partial<T>,
@@ -873,29 +885,39 @@ function applyStageRewards(
   }
 }
 
+function mergeProgressForActiveIds(
+  existing: Record<string, number>,
+  activeIds: string[],
+): Record<string, number> {
+  const next = { ...existing }
+  for (const id of activeIds) {
+    const mission = MISSION_BY_ID[id]
+    if (!mission) continue
+    for (const g of mission.goals) {
+      const key = goalKey(id, g.id)
+      if (next[key] == null) next[key] = 0
+    }
+  }
+  return next
+}
+
 function ensureActiveMission(
   completedMissions: string[],
   playerLevel: number,
-  activeMissionId: string | null,
+  _activeMissionIds: string[],
   existingProgress?: Record<string, number>,
-): { activeMissionId: string | null; missionProgress: Record<string, number> } {
-  const completed = completedMissions
-  const activeMission = activeMissionId ? MISSION_BY_ID[activeMissionId] : undefined
-  const activeOk =
-    activeMission &&
-    !completed.includes(activeMissionId!) &&
-    (!activeMission.requires || completed.includes(activeMission.requires))
-  if (activeOk) {
-    return {
-      activeMissionId,
-      missionProgress:
-        existingProgress ?? emptyProgress(activeMission.goals, activeMission.id),
-    }
-  }
-  const next = resolveActiveMission(completed, playerLevel, MISSIONS)
+): { activeMissionIds: string[]; missionProgress: Record<string, number> } {
+  const activeMissionIds = resolveActiveMissionIds(
+    completedMissions,
+    playerLevel,
+    MISSIONS,
+  )
   return {
-    activeMissionId: next?.id ?? null,
-    missionProgress: next ? emptyProgress(next.goals, next.id) : {},
+    activeMissionIds,
+    missionProgress: mergeProgressForActiveIds(
+      existingProgress ?? {},
+      activeMissionIds,
+    ),
   }
 }
 
@@ -1010,10 +1032,10 @@ function migrateSaveState(
     const missionFix = ensureActiveMission(
       completed,
       level,
-      (state.activeMissionId as string | null) ?? null,
+      (state.activeMissionIds as string[]) ?? [],
       state.missionProgress as Record<string, number> | undefined,
     )
-    state.activeMissionId = missionFix.activeMissionId
+    state.activeMissionIds = missionFix.activeMissionIds
     state.missionProgress = missionFix.missionProgress
   }
   if (version < 10) {
@@ -1023,10 +1045,10 @@ function migrateSaveState(
     const missionFix = ensureActiveMission(
       completed,
       level,
-      (state.activeMissionId as string | null) ?? null,
+      (state.activeMissionIds as string[]) ?? [],
       state.missionProgress as Record<string, number> | undefined,
     )
-    state.activeMissionId = missionFix.activeMissionId
+    state.activeMissionIds = missionFix.activeMissionIds
     state.missionProgress = missionFix.missionProgress
     if (typeof state.eventStageIndex !== 'number') {
       state.eventStageIndex = 0
@@ -1101,22 +1123,21 @@ function migrateSaveState(
     }
   }
   if (version < 15) {
-    const activeMissionId = state.activeMissionId as string | null | undefined
-    if (activeMissionId && state.missionProgress) {
-      state.missionProgress = migrateMissionProgress(
-        activeMissionId,
-        state.missionProgress as Record<string, number>,
-      )
-      if (
-        !isMissionComplete(
-          activeMissionId,
-          state.missionProgress as Record<string, number>,
-        )
-      ) {
-        state.popupQueue = ((state.popupQueue as PopupState[]) ?? []).filter(
-          (p) => p.kind !== 'mission_claim',
-        )
+    const activeIds =
+      (state.activeMissionIds as string[] | undefined) ??
+      (state.activeMissionId ? [state.activeMissionId as string] : [])
+    if (activeIds.length > 0 && state.missionProgress) {
+      let progress = state.missionProgress as Record<string, number>
+      for (const missionId of activeIds) {
+        progress = migrateMissionProgress(missionId, progress)
       }
+      state.missionProgress = progress
+      state.popupQueue = ((state.popupQueue as PopupState[]) ?? []).filter(
+        (p) =>
+          p.kind !== 'mission_claim' ||
+          (p.missionId != null &&
+            !isMissionComplete(p.missionId, progress)),
+      )
     }
   }
   if (version < 16) {
@@ -1248,6 +1269,92 @@ function migrateSaveState(
       addCompleted(bridgesAfter9)
     }
   }
+  if (version < 29) {
+    const completed = (state.completedMissions as string[]) ?? []
+    const addCompleted = (ids: string[]) => {
+      state.completedMissions = [
+        ...new Set([...(state.completedMissions as string[]), ...ids]),
+      ]
+    }
+    const extendedBridges = [
+      'm7e_kitchen_garden',
+      'm7f_fluffy_friends',
+      'm7g_duck_splash',
+      'm7h_bull_strength',
+      'm7i_loom_song',
+      'm7j_goat_milk',
+      'm7k_stitch_fair',
+      'm7l_pig_pen',
+      'm7m_valley_wine',
+      'm7n_maple_sweet',
+    ]
+    const passedHearth =
+      completed.includes('m8_hearth') ||
+      completed.includes('m9_soft_fleece') ||
+      completed.includes('m10_celebration')
+    if (
+      completed.includes('m7d_cider_start') &&
+      passedHearth &&
+      extendedBridges.some((id) => !completed.includes(id))
+    ) {
+      addCompleted(extendedBridges)
+    }
+    if (
+      completed.includes('m7_sweet_jar') &&
+      passedHearth &&
+      !completed.includes('m7d_cider_start')
+    ) {
+      addCompleted([
+        'm7b_busy_bees',
+        'm7c_fire_side',
+        'm7d_cider_start',
+        ...extendedBridges,
+      ])
+    }
+  }
+  if (version < 30) {
+    const legacyId = state.activeMissionId as string | null | undefined
+    if (!Array.isArray(state.activeMissionIds)) {
+      state.activeMissionIds = legacyId ? [legacyId] : []
+    }
+    delete state.activeMissionId
+    const level = levelFromXp(typeof state.xp === 'number' ? state.xp : 0)
+    const fix = ensureActiveMission(
+      (state.completedMissions as string[]) ?? [],
+      level,
+      (state.activeMissionIds as string[]) ?? [],
+      (state.missionProgress as Record<string, number>) ?? {},
+    )
+    state.activeMissionIds = fix.activeMissionIds
+    state.missionProgress = fix.missionProgress
+  }
+  if (version < 31) {
+    if (state.seeds && typeof state.seeds === 'object') {
+      const seeds = { ...(state.seeds as Record<string, number>) }
+      const saplings = {
+        ...((state.saplings as Record<string, number>) ?? {}),
+      }
+      if (seeds.apple) {
+        saplings.apple_tree = (saplings.apple_tree ?? 0) + seeds.apple
+        delete seeds.apple
+      }
+      if (seeds.peach) {
+        saplings.peach_tree = (saplings.peach_tree ?? 0) + seeds.peach
+        delete seeds.peach
+      }
+      state.seeds = seeds
+      state.saplings = saplings
+    }
+    const level = levelFromXp(typeof state.xp === 'number' ? state.xp : 0)
+    const fix = ensureActiveMission(
+      (state.completedMissions as string[]) ?? [],
+      level,
+      (state.activeMissionIds as string[]) ?? [],
+      (state.missionProgress as Record<string, number>) ?? {},
+    )
+    state.activeMissionIds = fix.activeMissionIds
+    state.missionProgress = fix.missionProgress
+  }
   return state
 }
 
@@ -1337,7 +1444,7 @@ export interface GameState {
   animalSpeedLevel: Partial<Record<AnimalTypeId, number>>
   farmSpeedLevel: number
   completedMissions: string[]
-  activeMissionId: string | null
+  activeMissionIds: string[]
   missionProgress: Record<string, number>
   activeEventId: string | null
   eventEndsAt: number | null
@@ -1458,7 +1565,7 @@ export interface GameState {
   sellSeeds: (id: CropId, qty?: number) => void
   sellMaterial: (id: MaterialId, qty?: number) => void
 
-  claimMission: () => void
+  claimMission: (missionId?: string) => void
   startEvent: (eventId: string) => void
   claimEvent: () => void
   claimScheduledGoal: (period: 'daily' | 'weekly', slotId: string) => void
@@ -1489,6 +1596,7 @@ export interface GameState {
 const initial = () => {
   const missionId = firstMissionId()
   const mission = MISSION_BY_ID[missionId]
+  const activeMissionIds = missionId ? [missionId] : []
   return {
     coins: 80,
     xp: 0,
@@ -1516,7 +1624,7 @@ const initial = () => {
     animalSpeedLevel: {} as Partial<Record<AnimalTypeId, number>>,
     farmSpeedLevel: 0,
     completedMissions: [] as string[],
-    activeMissionId: missionId as string | null,
+    activeMissionIds,
     missionProgress: mission ? emptyProgress(mission.goals, missionId) : {},
     activeEventId: null as string | null,
     eventEndsAt: null as number | null,
@@ -1824,7 +1932,9 @@ export const useGame = create<GameState>()(
             })
             return
           }
-          set({ toast: `${crop.name} seeds locked — finish Missions first` })
+          set({
+            toast: `${crop.name} seeds unlock at Level ${crop.unlockLevel}`,
+          })
           return
         }
 
@@ -2108,13 +2218,13 @@ export const useGame = create<GameState>()(
               ? (base.materials[target as MaterialId] ?? 0)
               : amount
 
-        if (base.activeMissionId) {
-          const mission = MISSION_BY_ID[base.activeMissionId]
-          if (mission && !isMissionLevelGated(mission, playerLevel)) {
+        for (const missionId of base.activeMissionIds) {
+          const mission = MISSION_BY_ID[missionId]
+          if (mission) {
             missionProgress = bumpGoals(
               missionProgress,
               mission.goals,
-              base.activeMissionId,
+              missionId,
               kind as MissionGoal['kind'],
               target,
               value,
@@ -2191,7 +2301,9 @@ export const useGame = create<GameState>()(
         const crop = CROPS[id]
         if (!crop) return
         if (!get().isCropAvailable(id)) {
-          set({ toast: 'Crop locked — finish missions to unlock' })
+          set({
+            toast: `${crop.name} unlocks at Level ${crop.unlockLevel}`,
+          })
           return
         }
         const cost = crop.seedCost * amount
@@ -2249,7 +2361,9 @@ export const useGame = create<GameState>()(
         const crop = CROPS[cropId]
         if (!crop) return
         if (!s.isCropAvailable(cropId)) {
-          set({ toast: 'Crop locked — finish missions to unlock' })
+          set({
+            toast: `${crop.name} unlocks at Level ${crop.unlockLevel}`,
+          })
           return
         }
         if ((s.seeds[cropId] ?? 0) < 1) {
@@ -2775,6 +2889,9 @@ export const useGame = create<GameState>()(
           toast: `Collected ${def.productQty}× ${label}`,
         })
         get().track('collect_animal', mat ?? good ?? def.id, def.productQty)
+        if (mat) {
+          get().track('own_material', mat)
+        }
       },
 
       fulfillOrder: (slot) => {
@@ -3178,10 +3295,14 @@ export const useGame = create<GameState>()(
         get().track('own_coins', undefined, get().coins)
       },
 
-      claimMission: () => {
+      claimMission: (missionId?: string) => {
         const s = get()
-        const id = s.activeMissionId
+        const id =
+          missionId ??
+          s.popupQueue.find((p) => p.kind === 'mission_claim')?.missionId ??
+          s.activeMissionIds[0]
         if (!id) return
+        if (!s.activeMissionIds.includes(id)) return
         const mission = MISSION_BY_ID[id]
         if (!mission) return
         const done = mission.goals.every(
@@ -3191,12 +3312,23 @@ export const useGame = create<GameState>()(
           set({ toast: 'Finish all mission goals first' })
           return
         }
+        const playerLevel = levelFromXp(s.xp)
+        if (isMissionLevelGated(mission, playerLevel)) {
+          set({
+            toast: `Reach Level ${mission.minLevel} to claim this mission`,
+          })
+          return
+        }
         const queueWithoutClaim = s.popupQueue.filter(
-          (p) => p.kind !== 'mission_claim',
+          (p) => !(p.kind === 'mission_claim' && p.missionId === id),
         )
         const completedMissions = [...s.completedMissions, id]
-        const playerLevel = levelFromXp(s.xp + mission.rewardXp)
-        const next = resolveActiveMission(completedMissions, playerLevel, MISSIONS)
+        const playerLevelAfter = levelFromXp(s.xp + mission.rewardXp)
+        const nextIds = resolveActiveMissionIds(
+          completedMissions,
+          playerLevelAfter,
+          MISSIONS,
+        )
         const xpResult = applyXpGain(
           s.xp,
           mission.rewardXp,
@@ -3217,8 +3349,11 @@ export const useGame = create<GameState>()(
           unlocked: xpResult.unlocked,
           inventory: addItems(s.inventory, mission.rewardItems),
           completedMissions,
-          activeMissionId: next?.id ?? null,
-          missionProgress: next ? emptyProgress(next.goals, next.id) : {},
+          activeMissionIds: nextIds,
+          missionProgress: mergeProgressForActiveIds(
+            s.missionProgress,
+            nextIds,
+          ),
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -3837,14 +3972,15 @@ export const useGame = create<GameState>()(
         const missionFix = ensureActiveMission(
           s.completedMissions,
           level,
-          s.activeMissionId,
+          s.activeMissionIds,
+          s.missionProgress,
         )
         set({
           xp: newXp,
           unlocked,
           seeds,
           activeOrders,
-          activeMissionId: missionFix.activeMissionId,
+          activeMissionIds: missionFix.activeMissionIds,
           missionProgress: missionFix.missionProgress,
           tab: level >= TAVERN_UNLOCK_LEVEL ? 'adventure' : s.tab,
           toast: `Dev boost: Level ${level}`,
@@ -3875,44 +4011,35 @@ export const useGame = create<GameState>()(
           (state.achievementProgress as Record<string, number>) ?? {},
           state as GameState,
         )
-        if (!state.activeMissionId) {
-          const fix = ensureActiveMission(
-            state.completedMissions ?? [],
-            level,
-            null,
+        const fix = ensureActiveMission(
+          state.completedMissions ?? [],
+          level,
+          state.activeMissionIds ?? [],
+          state.missionProgress,
+        )
+        state.activeMissionIds = fix.activeMissionIds
+        state.missionProgress = fix.missionProgress
+        for (const missionId of state.activeMissionIds) {
+          state.missionProgress = computeMissionProgressFromState(
+            state,
+            missionId,
           )
-          state.activeMissionId = fix.activeMissionId
-          state.missionProgress = fix.missionProgress
-        } else {
-          const fix = ensureActiveMission(
-            state.completedMissions ?? [],
-            level,
-            state.activeMissionId,
-            state.missionProgress,
-          )
-          if (fix.activeMissionId !== state.activeMissionId) {
-            state.activeMissionId = fix.activeMissionId
-            state.missionProgress = fix.missionProgress
+          if (isMissionComplete(missionId, state.missionProgress)) {
+            const mission = MISSION_BY_ID[missionId]
+            if (
+              mission &&
+              !isMissionLevelGated(mission, level) &&
+              !state.popupQueue.some(
+                (p) => p.kind === 'mission_claim' && p.missionId === missionId,
+              )
+            ) {
+              state.popupQueue = [
+                missionClaimPopup(mission),
+                ...(state.popupQueue ?? []),
+              ]
+            }
           }
         }
-        if (!state.activeMissionId) return
-        const mission = MISSION_BY_ID[state.activeMissionId]
-        if (!mission) return
-        state.missionProgress = computeMissionProgressFromState(
-          state,
-          state.activeMissionId,
-        )
-        if (!isMissionComplete(state.activeMissionId, state.missionProgress)) {
-          state.popupQueue = (state.popupQueue ?? []).filter(
-            (p) => p.kind !== 'mission_claim',
-          )
-          return
-        }
-        if (state.popupQueue.some((p) => p.kind === 'mission_claim')) return
-        state.popupQueue = [
-          missionClaimPopup(mission),
-          ...(state.popupQueue ?? []).filter((p) => p.kind !== 'mission_claim'),
-        ]
       },
       partialize: (s) => ({
         coins: s.coins,
@@ -3940,7 +4067,7 @@ export const useGame = create<GameState>()(
         animalSpeedLevel: s.animalSpeedLevel,
         farmSpeedLevel: s.farmSpeedLevel,
         completedMissions: s.completedMissions,
-        activeMissionId: s.activeMissionId,
+        activeMissionIds: s.activeMissionIds,
         missionProgress: s.missionProgress,
         activeEventId: s.activeEventId,
         eventEndsAt: s.eventEndsAt,
