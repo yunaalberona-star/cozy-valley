@@ -34,6 +34,26 @@ import {
   recipeProducing,
   recipeProducingMaterial,
 } from './data/itemSources'
+import type { BagPaneId } from './data/bagCategories'
+import { bagItemCategory, bagMaterialCategory } from './data/bagCategories'
+import {
+  addStorageParts,
+  bagTabCapacity,
+  BAG_PANE_LABEL,
+  bagUpgradeCost,
+  bagStorageLevel,
+  canGrantBag,
+  formatStoragePartCost,
+  hasStorageParts,
+  minLevelsForContents,
+  rollAdventureStorageDrop,
+  rollOrderStorageDrop,
+  rollShipStorageDrop,
+  takeStorageParts,
+  STORAGE_PART_META,
+  type BagContentsSlice,
+  type BagGrant,
+} from './data/bagStorage'
 import { recipeUnlockLevel } from './data/unlockOrder'
 import {
   GEAR_BLUEPRINT_BY_ID,
@@ -86,8 +106,9 @@ import { LEGACY_MISSION_ID_MAP } from './data/missionChain'
 import { buildingUnlockLevel, unlocksCrossingLevels, unlocksForLevel } from './data/levelUnlocks'
 import { MAX_RECRUITED_NPCS, NPCS } from './data/npcs'
 import { grantRecruitXp, partyPower } from './data/recruits'
-import { ORDERS } from './data/orders'
+import { ORDERS, pickActiveOrders, pickReplacementOrderId, hasInvalidActiveOrders } from './data/orders'
 import {
+  hasInvalidShipOrders,
   rollShipOrders,
   shipPeriodKey,
   SHIP_SLOTS,
@@ -143,6 +164,7 @@ import type {
   RecruitedNpc,
   FarmPaneId,
   ShopPaneId,
+  StoragePartId,
   TabId,
   TreeId,
   TreeSlotState,
@@ -153,7 +175,6 @@ const START_PLOTS = 6
 const MAX_PLOTS = 16
 const START_TREE_SLOTS = 2
 const MAX_TREE_SLOTS = 8
-const ORDER_SLOTS = 3
 const PLOT_UNLOCK_BASE = 250
 const TREE_SLOT_UNLOCK_BASE = 550
 
@@ -173,27 +194,6 @@ function emptyTreeSlots(count: number): TreeSlotState[] {
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-}
-
-function pickOrders(level: number, exclude: string[] = []): ActiveOrder[] {
-  const pool = ORDERS.filter(
-    (o) => o.unlockLevel <= level && !exclude.includes(o.id),
-  )
-  const fallback = ORDERS.filter((o) => o.unlockLevel <= level)
-  const source = pool.length >= ORDER_SLOTS ? pool : fallback
-  const shuffled = [...source].sort(() => Math.random() - 0.5)
-  return shuffled.slice(0, ORDER_SLOTS).map((o, slot) => ({
-    orderId: o.id,
-    slot,
-  }))
-}
-
-function pickReplacementOrderId(level: number, exclude: string[]): string | null {
-  const available = ORDERS.filter((o) => o.unlockLevel <= level)
-  const fresh = available.filter((o) => !exclude.includes(o.id))
-  const pool = fresh.length > 0 ? fresh : available
-  if (pool.length === 0) return null
-  return pool[Math.floor(Math.random() * pool.length)]!.id
 }
 
 function hasItems(
@@ -285,6 +285,113 @@ function addMaterials(
     next = addMaterial(next, id as MaterialId, qty ?? 0)
   }
   return next
+}
+
+function bagSlice(
+  s: Pick<
+    GameState,
+    | 'inventory'
+    | 'materials'
+    | 'seeds'
+    | 'saplings'
+    | 'gearInventory'
+    | 'bagCapacityLevel'
+  >,
+): BagContentsSlice {
+  return {
+    inventory: s.inventory,
+    materials: s.materials,
+    seeds: s.seeds,
+    saplings: s.saplings,
+    gearInventory: s.gearInventory,
+    bagCapacityLevel: s.bagCapacityLevel ?? {},
+  }
+}
+
+function applyBagGrantFields(
+  s: Pick<GameState, 'inventory' | 'materials' | 'seeds' | 'saplings'>,
+  grant: BagGrant,
+): Pick<GameState, 'inventory' | 'materials' | 'seeds' | 'saplings'> {
+  let saplings = s.saplings
+  if (grant.saplings) {
+    saplings = { ...saplings }
+    for (const [id, qty] of Object.entries(grant.saplings)) {
+      if (!qty) continue
+      saplings[id as TreeId] = (saplings[id as TreeId] ?? 0) + qty
+    }
+  }
+  return {
+    inventory: grant.inventory
+      ? addItems(s.inventory, grant.inventory)
+      : s.inventory,
+    materials: grant.materials
+      ? addMaterials(s.materials, grant.materials)
+      : s.materials,
+    seeds: grant.seeds ? addSeeds(s.seeds, grant.seeds) : s.seeds,
+    saplings,
+  }
+}
+
+function tryApplyBagGrant(
+  s: Pick<
+    GameState,
+    | 'inventory'
+    | 'materials'
+    | 'seeds'
+    | 'saplings'
+    | 'gearInventory'
+    | 'bagCapacityLevel'
+  >,
+  grant: BagGrant,
+):
+  | { ok: true; patch: ReturnType<typeof applyBagGrantFields> }
+  | { ok: false; pane: BagPaneId } {
+  const check = canGrantBag(bagSlice(s), grant)
+  if (!check.ok) return { ok: false, pane: check.pane }
+  return { ok: true, patch: applyBagGrantFields(s, grant) }
+}
+
+function bagFullToast(pane: BagPaneId): string {
+  return `${BAG_PANE_LABEL[pane]} full — expand storage in Bag or sell goods.`
+}
+
+function canAddLooseGear(
+  s: Pick<
+    GameState,
+    | 'inventory'
+    | 'materials'
+    | 'seeds'
+    | 'saplings'
+    | 'gearInventory'
+    | 'bagCapacityLevel'
+  >,
+  count = 1,
+): boolean {
+  return canGrantBag(bagSlice(s), { gearAdd: count }).ok
+}
+
+function storagePartDropToast(
+  parts: Partial<Record<StoragePartId, number>>,
+): string | null {
+  const entries = Object.entries(parts).filter(([, q]) => (q ?? 0) > 0)
+  if (entries.length === 0) return null
+  const labels = entries.map(([id, qty]) => {
+    const meta = STORAGE_PART_META[id as StoragePartId]
+    return `${qty}× ${meta.emoji}`
+  })
+  return `Storage parts: ${labels.join(', ')}`
+}
+
+function seedDeltaFromXp(
+  before: Partial<Record<CropId, number>>,
+  after: Partial<Record<CropId, number>>,
+): Partial<Record<CropId, number>> | undefined {
+  const delta: Partial<Record<CropId, number>> = {}
+  for (const [id, qty] of Object.entries(after)) {
+    const add = (qty ?? 0) - (before[id as CropId] ?? 0)
+    if (add > 0) delta[id as CropId] = add
+  }
+  return Object.keys(delta).length > 0 ? delta : undefined
 }
 
 function isMaterialId(id: string): id is MaterialId {
@@ -463,7 +570,7 @@ function applyXpGain(
       ),
     )
     if (levelIds.includes('orders_board') && activeOrders.length === 0) {
-      nextOrders = pickOrders(newLevel)
+      nextOrders = pickActiveOrders(newLevel)
     }
   }
   const newCrops = cropsCrossingLevels(oldLevel, newLevel)
@@ -509,10 +616,12 @@ function ensureShipOrders(
 > {
   if (!slice.unlocked.includes('orders_board')) return {}
   const key = shipPeriodKey()
+  const hasUnobtainable = hasInvalidShipOrders(slice.activeShipOrders, playerLevel)
   if (
     slice.shipPeriodKey !== key ||
     slice.activeShipOrders.length === 0 ||
-    slice.activeShipOrders.length !== SHIP_SLOTS
+    slice.activeShipOrders.length !== SHIP_SLOTS ||
+    hasUnobtainable
   ) {
     return {
       shipPeriodKey: key,
@@ -1002,7 +1111,7 @@ function migrateSaveState(
       (!Array.isArray(state.activeOrders) ||
         (state.activeOrders as ActiveOrder[]).length === 0)
     ) {
-      state.activeOrders = pickOrders(levelFromXp(xp))
+      state.activeOrders = pickActiveOrders(levelFromXp(xp))
     }
   }
   if (version < 7) {
@@ -1355,6 +1464,40 @@ function migrateSaveState(
     state.activeMissionIds = fix.activeMissionIds
     state.missionProgress = fix.missionProgress
   }
+  if (version < 32) {
+    const slice: BagContentsSlice = {
+      inventory: (state.inventory as BagContentsSlice['inventory']) ?? {},
+      materials: (state.materials as BagContentsSlice['materials']) ?? {},
+      seeds: (state.seeds as BagContentsSlice['seeds']) ?? {},
+      saplings: (state.saplings as BagContentsSlice['saplings']) ?? {},
+      gearInventory: (state.gearInventory as GearInstance[]) ?? [],
+      bagCapacityLevel: {},
+    }
+    state.bagCapacityLevel = minLevelsForContents(slice)
+    if (!state.storageParts || typeof state.storageParts !== 'object') {
+      state.storageParts = {}
+    }
+  }
+  if (version < 33) {
+    const xp = typeof state.xp === 'number' ? state.xp : 0
+    const level = levelFromXp(xp)
+    const unlocked = (state.unlocked as UnlockId[] | undefined) ?? []
+    if (unlocked.includes('orders_board')) {
+      const activeOrders = (state.activeOrders as ActiveOrder[] | undefined) ?? []
+      if (hasInvalidActiveOrders(activeOrders, level)) {
+        state.activeOrders = pickActiveOrders(level)
+      }
+      const shipOrders = (state.activeShipOrders as ActiveShipOrder[] | undefined) ?? []
+      if (hasInvalidShipOrders(shipOrders, level)) {
+        const key =
+          typeof state.shipPeriodKey === 'string'
+            ? state.shipPeriodKey
+            : shipPeriodKey()
+        state.activeShipOrders = rollShipOrders(level, key)
+        state.shipBoardComplete = false
+      }
+    }
+  }
   return state
 }
 
@@ -1366,53 +1509,81 @@ function treeAvailable(treeId: TreeId, playerLevel: number): boolean {
   return TREES[treeId].unlockLevel <= playerLevel
 }
 
+type MarketItemPatch = Partial<
+  Pick<GameState, 'inventory' | 'seeds' | 'materials' | 'storageParts'>
+>
+
 function addMarketItems(
   itemKind: MarketItemKind,
   itemId: string,
   qty: number,
-  state: Pick<GameState, 'inventory' | 'seeds' | 'materials'>,
-): Pick<GameState, 'inventory' | 'seeds' | 'materials'> {
-  if (itemKind === 'goods') {
-    return { ...state, inventory: addItem(state.inventory, itemId as ItemId, qty) }
-  }
-  if (itemKind === 'seeds') {
+  state: Pick<
+    GameState,
+    | 'inventory'
+    | 'seeds'
+    | 'materials'
+    | 'storageParts'
+    | 'saplings'
+    | 'gearInventory'
+    | 'bagCapacityLevel'
+  >,
+): MarketItemPatch | null {
+  if (itemKind === 'storage_parts') {
     return {
-      ...state,
-      seeds: {
-        ...state.seeds,
-        [itemId as CropId]: (state.seeds[itemId as CropId] ?? 0) + qty,
-      },
+      storageParts: addStorageParts(state.storageParts ?? {}, {
+        [itemId as StoragePartId]: qty,
+      }),
     }
   }
-  return {
-    ...state,
-    materials: addMaterial(state.materials, itemId as MaterialId, qty),
+  if (itemKind === 'goods') {
+    const applied = tryApplyBagGrant(state, {
+      inventory: { [itemId as ItemId]: qty },
+    })
+    if (!applied.ok) return null
+    return applied.patch
   }
+  if (itemKind === 'seeds') {
+    const applied = tryApplyBagGrant(state, {
+      seeds: { [itemId as CropId]: qty },
+    })
+    if (!applied.ok) return null
+    return applied.patch
+  }
+  const applied = tryApplyBagGrant(state, {
+    materials: { [itemId as MaterialId]: qty },
+  })
+  if (!applied.ok) return null
+  return applied.patch
 }
 
 function takeMarketItems(
   itemKind: MarketItemKind,
   itemId: string,
   qty: number,
-  state: Pick<GameState, 'inventory' | 'seeds' | 'materials'>,
-): Pick<GameState, 'inventory' | 'seeds' | 'materials'> | null {
+  state: Pick<GameState, 'inventory' | 'seeds' | 'materials' | 'storageParts'>,
+): MarketItemPatch | null {
+  if (itemKind === 'storage_parts') {
+    if ((state.storageParts?.[itemId as StoragePartId] ?? 0) < qty) return null
+    const next = { ...(state.storageParts ?? {}) }
+    const left = (next[itemId as StoragePartId] ?? 0) - qty
+    if (left <= 0) delete next[itemId as StoragePartId]
+    else next[itemId as StoragePartId] = left
+    return { storageParts: next }
+  }
   if (itemKind === 'goods') {
     if ((state.inventory[itemId as ItemId] ?? 0) < qty) return null
     return {
-      ...state,
       inventory: takeItems(state.inventory, { [itemId as ItemId]: qty }),
     }
   }
   if (itemKind === 'seeds') {
     if ((state.seeds[itemId as CropId] ?? 0) < qty) return null
     return {
-      ...state,
       seeds: takeSeeds(state.seeds, { [itemId as CropId]: qty }),
     }
   }
   if ((state.materials[itemId as MaterialId] ?? 0) < qty) return null
   return {
-    ...state,
     materials: takeMaterial(state.materials, { [itemId as MaterialId]: qty }),
   }
 }
@@ -1487,6 +1658,8 @@ export interface GameState {
   shopTreeScrollTarget: TreeId | null
   machineScrollTarget: string | null
   unclaimedMarketSales: MarketSaleClaim[]
+  bagCapacityLevel: Partial<Record<BagPaneId, number>>
+  storageParts: Partial<Record<StoragePartId, number>>
 
   setTab: (tab: TabId) => void
   setShopPane: (pane: ShopPaneId) => void
@@ -1566,6 +1739,7 @@ export interface GameState {
   sellMaterial: (id: MaterialId, qty?: number) => void
 
   claimMission: (missionId?: string) => void
+  upgradeBagStorage: (pane: BagPaneId) => void
   startEvent: (eventId: string) => void
   claimEvent: () => void
   claimScheduledGoal: (period: 'daily' | 'weekly', slotId: string) => void
@@ -1667,6 +1841,8 @@ const initial = () => {
     shopTreeScrollTarget: null as TreeId | null,
     machineScrollTarget: null as string | null,
     unclaimedMarketSales: [] as MarketSaleClaim[],
+    bagCapacityLevel: {} as Partial<Record<BagPaneId, number>>,
+    storageParts: {} as Partial<Record<StoragePartId, number>>,
   }
 }
 
@@ -2311,9 +2487,15 @@ export const useGame = create<GameState>()(
           set({ toast: 'Not enough coins' })
           return
         }
-        set((s) => ({
-          coins: s.coins - cost,
-          seeds: { ...s.seeds, [id]: (s.seeds[id] ?? 0) + amount },
+        const s = get()
+        const bagGrant = tryApplyBagGrant(s, { seeds: { [id]: amount } })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
+        set((state) => ({
+          coins: state.coins - cost,
+          ...bagGrant.patch,
           toast: `Bought ${amount}× ${crop.name} seed`,
           guideItemHighlights: s.guideItemHighlights.filter((h) => h !== id),
           contextGuideTab:
@@ -2338,9 +2520,15 @@ export const useGame = create<GameState>()(
           set({ toast: 'Not enough coins' })
           return
         }
-        set((s) => ({
-          coins: s.coins - cost,
-          saplings: { ...s.saplings, [id]: (s.saplings[id] ?? 0) + amount },
+        const s = get()
+        const bagGrant = tryApplyBagGrant(s, { saplings: { [id]: amount } })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
+        set((state) => ({
+          coins: state.coins - cost,
+          ...bagGrant.patch,
           toast: `Bought ${amount}× ${tree.name} sapling`,
           guideItemHighlights: s.guideItemHighlights.filter((h) => h !== id),
           contextGuideTab:
@@ -2410,11 +2598,18 @@ export const useGame = create<GameState>()(
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        const bagGrant = tryApplyBagGrant(s, {
+          inventory: { [cropId]: crop.harvestQty },
+          seeds: seedDeltaFromXp(s.seeds, xpResult.seeds),
+        })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
         set({
           plots,
-          inventory: addItem(s.inventory, cropId, crop.harvestQty),
+          ...bagGrant.patch,
           xp: xpResult.xp,
-          seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
           activeOrders: xpResult.activeOrders,
@@ -2504,11 +2699,18 @@ export const useGame = create<GameState>()(
           levelFromXp(xpResult.xp),
         )
         const productMeta = ITEM_META[tree.product]
+        const bagGrant = tryApplyBagGrant(s, {
+          inventory: { [tree.product]: tree.harvestQty },
+          seeds: seedDeltaFromXp(s.seeds, xpResult.seeds),
+        })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
         set({
           treeSlots,
-          inventory: addItem(s.inventory, tree.product, tree.harvestQty),
+          ...bagGrant.patch,
           xp: xpResult.xp,
-          seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
           activeOrders: xpResult.activeOrders,
@@ -2617,20 +2819,23 @@ export const useGame = create<GameState>()(
             ? ITEM_META[recipe.output].name
             : 'item'
         const outputQty = materialRecipeYield(recipe, s.gatherSlots)
+        const bagGrant = tryApplyBagGrant(s, {
+          inventory: recipe.output
+            ? { [recipe.output]: outputQty }
+            : undefined,
+          materials: recipe.materialOutput
+            ? { [recipe.materialOutput]: outputQty }
+            : undefined,
+          seeds: seedDeltaFromXp(s.seeds, xpResult.seeds),
+        })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
         set({
           craftQueue,
-          inventory: recipe.output
-            ? addItem(s.inventory, recipe.output, outputQty)
-            : s.inventory,
-          materials: recipe.materialOutput
-            ? addMaterial(
-                s.materials,
-                recipe.materialOutput,
-                outputQty,
-              )
-            : s.materials,
+          ...bagGrant.patch,
           xp: xpResult.xp,
-          seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
           activeOrders: xpResult.activeOrders,
@@ -2867,15 +3072,18 @@ export const useGame = create<GameState>()(
           : good
             ? ITEM_META[good].name
             : 'goods'
+        const bagGrant = tryApplyBagGrant(s, {
+          inventory: good ? { [good]: def.productQty } : undefined,
+          materials: mat ? { [mat]: def.productQty } : undefined,
+          seeds: seedDeltaFromXp(s.seeds, xpResult.seeds),
+        })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
         set({
-          inventory: good
-            ? addItem(s.inventory, good, def.productQty)
-            : s.inventory,
-          materials: mat
-            ? addMaterial(s.materials, mat, def.productQty)
-            : s.materials,
+          ...bagGrant.patch,
           xp: xpResult.xp,
-          seeds: xpResult.seeds,
           unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
           activeOrders: xpResult.activeOrders,
@@ -2935,19 +3143,38 @@ export const useGame = create<GameState>()(
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        const nextInv = takeItems(s.inventory, order.needs)
+        const seedExtra = seedDeltaFromXp(s.seeds, xpResult.seeds)
+        if (seedExtra) {
+          const seedCheck = tryApplyBagGrant(
+            { ...s, inventory: nextInv },
+            { seeds: seedExtra },
+          )
+          if (!seedCheck.ok) {
+            set({ toast: bagFullToast(seedCheck.pane) })
+            return
+          }
+        }
+        const partDrop = rollOrderStorageDrop()
+        let toastMsg = replacement
+          ? `+${order.rewardCoins} coins · New order: ${replacement.name}`
+          : `+${order.rewardCoins} coins · +${order.rewardXp} XP`
+        const partMsg = storagePartDropToast(partDrop ?? {})
+        if (partMsg) toastMsg += ` · ${partMsg}`
         set({
-          inventory: takeItems(s.inventory, order.needs),
+          inventory: nextInv,
           coins: s.coins + order.rewardCoins,
           xp: xpResult.xp,
           seeds: xpResult.seeds,
+          storageParts: partDrop
+            ? addStorageParts(s.storageParts, partDrop)
+            : s.storageParts,
           unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
           activeOrders: activeOrdersAfter,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          toast: replacement
-            ? `+${order.rewardCoins} coins · New order: ${replacement.name}`
-            : `+${order.rewardCoins} coins · +${order.rewardXp} XP`,
+          toast: toastMsg,
         })
         get().track('fulfill_order', undefined, 1)
         get().track('own_coins', undefined, get().coins)
@@ -3012,16 +3239,21 @@ export const useGame = create<GameState>()(
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        const partDrop = rollShipStorageDrop()
+        let toastMsg = `+${totalCoins} coins · +${totalXp} XP · Shipment sent!`
+        const partMsg = storagePartDropToast(partDrop)
+        if (partMsg) toastMsg += ` · ${partMsg}`
         set({
           coins: s.coins + totalCoins,
           xp: xpResult.xp,
           seeds: xpResult.seeds,
+          storageParts: addStorageParts(s.storageParts, partDrop),
           unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
           shipBoardComplete: true,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          toast: `+${totalCoins} coins · +${totalXp} XP · Shipment sent!`,
+          toast: toastMsg,
         })
         get().track('fulfill_order', undefined, 1)
         get().track('own_coins', undefined, get().coins)
@@ -3060,11 +3292,7 @@ export const useGame = create<GameState>()(
           set({ toast: 'Not enough items to list' })
           return false
         }
-        set({
-          inventory: taken.inventory,
-          seeds: taken.seeds,
-          materials: taken.materials,
-        })
+        set({ ...taken })
         try {
           await createListing(
             getPlayerId(),
@@ -3126,14 +3354,17 @@ export const useGame = create<GameState>()(
             set({ toast: `Need ${total} coins` })
             return false
           }
-          set({ coins: s.coins - total })
           const added = addMarketItems(
             listing.item_kind,
             listing.item_id,
             listing.quantity,
-            get(),
+            s,
           )
-          set(added)
+          if (!added) {
+            set({ toast: 'Bag full — expand storage in Bag first' })
+            return false
+          }
+          set({ coins: s.coins - total, ...added })
           try {
             await buyListing(listing, buyerId, buyerName)
             set({
@@ -3150,7 +3381,7 @@ export const useGame = create<GameState>()(
             )
             set({
               coins: get().coins + total,
-              ...(rollback ?? get()),
+              ...(rollback ?? {}),
               toast:
                 err instanceof MarketError ? err.message : 'Purchase failed',
             })
@@ -3184,6 +3415,20 @@ export const useGame = create<GameState>()(
             listing.quantity,
             get(),
           )
+          if (!returned) {
+            set({
+              toast: bagFullToast(
+                listing.item_kind === 'storage_parts'
+                  ? 'machine'
+                  : listing.item_kind === 'seeds'
+                    ? 'seeds'
+                    : listing.item_kind === 'materials'
+                      ? bagMaterialCategory(listing.item_id as MaterialId)
+                      : bagItemCategory(listing.item_id as ItemId),
+              ),
+            })
+            return false
+          }
           set({
             ...returned,
             toast: 'Listing cancelled — items returned',
@@ -3295,6 +3540,26 @@ export const useGame = create<GameState>()(
         get().track('own_coins', undefined, get().coins)
       },
 
+      upgradeBagStorage: (pane) => {
+        const s = get()
+        const cost = bagUpgradeCost(s.bagCapacityLevel, pane)
+        if (!cost) {
+          set({ toast: `${BAG_PANE_LABEL[pane]} storage is maxed.` })
+          return
+        }
+        if (!hasStorageParts(s.storageParts, cost)) {
+          set({ toast: `Need ${formatStoragePartCost(cost)} to expand.` })
+          return
+        }
+        const nextLevel = bagStorageLevel(s.bagCapacityLevel, pane) + 1
+        const nextLevels = { ...s.bagCapacityLevel, [pane]: nextLevel }
+        set({
+          bagCapacityLevel: nextLevels,
+          storageParts: takeStorageParts(s.storageParts, cost),
+          toast: `${BAG_PANE_LABEL[pane]} expanded to ${bagTabCapacity(nextLevels, pane)} items!`,
+        })
+      },
+
       claimMission: (missionId?: string) => {
         const s = get()
         const id =
@@ -3342,12 +3607,19 @@ export const useGame = create<GameState>()(
           xpResult.unlocked,
           levelFromXp(xpResult.xp),
         )
+        const bagGrant = tryApplyBagGrant(s, {
+          inventory: mission.rewardItems,
+          seeds: seedDeltaFromXp(s.seeds, xpResult.seeds),
+        })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
         set({
           coins: s.coins + mission.rewardCoins,
           xp: xpResult.xp,
-          seeds: xpResult.seeds,
+          ...bagGrant.patch,
           unlocked: xpResult.unlocked,
-          inventory: addItems(s.inventory, mission.rewardItems),
           completedMissions,
           activeMissionIds: nextIds,
           missionProgress: mergeProgressForActiveIds(
@@ -3427,6 +3699,11 @@ export const useGame = create<GameState>()(
           unlocked = finale.unlocked
           xpGain += event.finaleReward.rewardXp ?? 0
         }
+        const inventoryGrant: Partial<Record<ItemId, number>> = {}
+        for (const [id, qty] of Object.entries(inventory)) {
+          const add = (qty ?? 0) - (s.inventory[id as ItemId] ?? 0)
+          if (add > 0) inventoryGrant[id as ItemId] = add
+        }
         const xpResult = applyXpGain(
           s.xp,
           xpGain,
@@ -3435,6 +3712,14 @@ export const useGame = create<GameState>()(
           s.activeOrders,
           seeds,
         )
+        const bagGrant = tryApplyBagGrant(s, {
+          inventory: inventoryGrant,
+          seeds: seedDeltaFromXp(s.seeds, xpResult.seeds),
+        })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
         const guides = unlockGuidePatch(
           s,
           xpResult.unlocked,
@@ -3444,9 +3729,8 @@ export const useGame = create<GameState>()(
           set({
             coins,
             xp: xpResult.xp,
-            seeds: xpResult.seeds,
+            ...bagGrant.patch,
             unlocked: xpResult.unlocked,
-            inventory,
             activeOrders: xpResult.activeOrders,
             guideTabPulses: guides.guideTabPulses,
             guideItemHighlights: guides.guideItemHighlights,
@@ -3467,9 +3751,8 @@ export const useGame = create<GameState>()(
         set({
           coins,
           xp: xpResult.xp,
-          seeds: xpResult.seeds,
+          ...bagGrant.patch,
           unlocked: xpResult.unlocked,
-          inventory,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
@@ -3774,21 +4057,36 @@ export const useGame = create<GameState>()(
           job.npcInstanceIds,
           scaled.recruitXp,
         )
+        const partDrop = rollAdventureStorageDrop(playerLevel)
+        const bagGrant = tryApplyBagGrant(s, {
+          inventory: adventure.rewardItems,
+          materials: materialDrops,
+          seeds: seedDeltaFromXp(s.seeds, xpResult.seeds),
+          gearAdd: gearDrops.length,
+        })
+        if (!bagGrant.ok) {
+          set({ toast: bagFullToast(bagGrant.pane) })
+          return
+        }
+        let advToast = `${adventure.name} complete! +${scaled.rewardCoins} coins · ${gearDrops.length} gear · recruits +${scaled.recruitXp} XP`
+        const partMsg = storagePartDropToast(partDrop ?? {})
+        if (partMsg) advToast += ` · ${partMsg}`
         set({
           activeAdventures: s.activeAdventures.filter((a) => a.id !== jobId),
           recruitedNpcs: updatedRecruits,
           coins: s.coins + scaled.rewardCoins,
           xp: xpResult.xp,
-          seeds: xpResult.seeds,
+          ...bagGrant.patch,
           unlocked: xpResult.unlocked,
           popupQueue: xpResult.popupQueue,
           activeOrders: xpResult.activeOrders,
           guideTabPulses: guides.guideTabPulses,
           guideItemHighlights: guides.guideItemHighlights,
-          inventory: addItems(s.inventory, adventure.rewardItems),
-          materials: addMaterials(s.materials, materialDrops),
           gearInventory: [...s.gearInventory, ...gearDrops],
-          toast: `${adventure.name} complete! +${scaled.rewardCoins} coins · ${gearDrops.length} gear · recruits +${scaled.recruitXp} XP`,
+          storageParts: partDrop
+            ? addStorageParts(s.storageParts, partDrop)
+            : s.storageParts,
+          toast: advToast,
         })
         get().track('complete_adventure', job.adventureId, 1)
         for (const matId of Object.keys(materialDrops) as MaterialId[]) {
@@ -3879,6 +4177,18 @@ export const useGame = create<GameState>()(
           levelFromXp(xpResult.xp),
         )
         const starUp = newStar > recipeStar(prevCount)
+        if (!canAddLooseGear(s, 1)) {
+          set({ toast: bagFullToast('gear') })
+          return
+        }
+        const seedExtra = seedDeltaFromXp(s.seeds, xpResult.seeds)
+        if (seedExtra) {
+          const seedCheck = tryApplyBagGrant(s, { seeds: seedExtra })
+          if (!seedCheck.ok) {
+            set({ toast: bagFullToast(seedCheck.pane) })
+            return
+          }
+        }
         set({
           gearCraftQueue: s.gearCraftQueue.filter((_, i) => i !== index),
           gearInventory: [...s.gearInventory, gear],
@@ -3967,7 +4277,7 @@ export const useGame = create<GameState>()(
           level >= ORDERS_UNLOCK_LEVEL &&
           activeOrders.length === 0
         ) {
-          activeOrders = pickOrders(level)
+          activeOrders = pickActiveOrders(level)
         }
         const missionFix = ensureActiveMission(
           s.completedMissions,
@@ -4047,6 +4357,8 @@ export const useGame = create<GameState>()(
         seeds: s.seeds,
         inventory: s.inventory,
         materials: s.materials,
+        bagCapacityLevel: s.bagCapacityLevel,
+        storageParts: s.storageParts,
         plots: s.plots,
         treeSlots: s.treeSlots,
         saplings: s.saplings,

@@ -2,14 +2,15 @@ import { ITEM_META } from './buildings'
 import { CROPS } from './crops'
 import { MATERIAL_META } from './gear'
 import { itemSellPrice, materialSellPrice, seedSellPrice } from './sellPrices'
-import type { CropId, ItemId, MaterialId } from '../types'
+import { STORAGE_PART_META } from './bagStorage'
+import type { CropId, ItemId, MaterialId, StoragePartId } from '../types'
 
 export const MARKET_UNLOCK_LEVEL = 7
 
 /** How long a listing stays active before expiring. */
 export const LISTING_DURATION_MS = 48 * 60 * 60 * 1000
 
-export type MarketItemKind = 'goods' | 'seeds' | 'materials'
+export type MarketItemKind = 'goods' | 'seeds' | 'materials' | 'storage_parts'
 
 const PRICE_MIN_MULT = 0.5
 const PRICE_MAX_MULT = 2
@@ -17,6 +18,9 @@ const PRICE_MAX_MULT = 2
 export function marketBasePrice(kind: MarketItemKind, itemId: string): number {
   if (kind === 'goods') return itemSellPrice(itemId as ItemId)
   if (kind === 'seeds') return seedSellPrice(itemId as CropId)
+  if (kind === 'storage_parts') {
+    return STORAGE_PART_META[itemId as StoragePartId]?.sellPrice ?? 50
+  }
   return materialSellPrice(itemId as MaterialId)
 }
 
@@ -52,6 +56,10 @@ export function marketItemLabel(
   if (kind === 'seeds') {
     const crop = CROPS[itemId as CropId]
     return { name: crop?.name ?? itemId, emoji: crop?.emoji ?? '🌱' }
+  }
+  if (kind === 'storage_parts') {
+    const meta = STORAGE_PART_META[itemId as StoragePartId]
+    return { name: meta?.name ?? itemId, emoji: meta?.emoji ?? '🔩' }
   }
   const meta = MATERIAL_META[itemId as MaterialId]
   return { name: meta?.name ?? itemId, emoji: meta?.emoji ?? '✨' }

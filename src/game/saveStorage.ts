@@ -2,7 +2,7 @@
 export const SAVE_STORAGE_KEY = 'cozy-valley-save'
 
 /** Bump when save shape changes; run migrations, do not rename SAVE_STORAGE_KEY. */
-export const SAVE_VERSION = 31
+export const SAVE_VERSION = 33
 
 const LEGACY_SAVE_KEYS = [
   'cozy-valley-save-v7',

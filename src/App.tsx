@@ -21,6 +21,21 @@ import {
   type CodexEntry,
 } from './game/data/codex'
 import { CROPS, SORTED_CROP_LIST, levelFromXp, xpProgress } from './game/data/crops'
+import { BAG_PANES, bagItemCategory, bagMaterialCategory, type BagPaneId } from './game/data/bagCategories'
+import {
+  bagTabCapacity,
+  bagTabUsage,
+  bagUpgradeCost,
+  bagStorageLevel,
+  formatStoragePartCost,
+  hasStorageParts,
+  BAG_PANE_LABEL,
+  BAG_CAPACITY_PER_LEVEL,
+  MAX_BAG_STORAGE_LEVEL,
+  STORAGE_PART_META,
+  STORAGE_PART_IDS,
+} from './game/data/bagStorage'
+import type { StoragePartId } from './game/types'
 import {
   ADVENTURES,
   adventuresForLevel,
@@ -2661,6 +2676,7 @@ function buildPostableItems(
   inventory: Partial<Record<ItemId, number>>,
   seeds: Partial<Record<CropId, number>>,
   materials: Partial<Record<MaterialId, number>>,
+  storageParts: Partial<Record<StoragePartId, number>>,
 ): PostableItem[] {
   const items: PostableItem[] = []
   for (const [id, qty] of Object.entries(inventory)) {
@@ -2694,6 +2710,18 @@ function buildPostableItems(
       qty: qty ?? 0,
       emoji: meta?.emoji ?? '✨',
       name: meta?.name ?? id,
+    })
+  }
+  for (const id of STORAGE_PART_IDS) {
+    const qty = storageParts[id] ?? 0
+    if (qty <= 0) continue
+    const meta = STORAGE_PART_META[id]
+    items.push({
+      kind: 'storage_parts',
+      id,
+      qty,
+      emoji: meta.emoji,
+      name: meta.name,
     })
   }
   return items.sort((a, b) => a.name.localeCompare(b.name))
@@ -3004,6 +3032,7 @@ function MarketView() {
   const inventory = useGame((s) => s.inventory)
   const seeds = useGame((s) => s.seeds)
   const materials = useGame((s) => s.materials)
+  const storageParts = useGame((s) => s.storageParts)
   const coins = useGame((s) => s.coins)
   const xp = useGame((s) => s.xp)
   const isMarketOpen = useGame((s) => s.isMarketOpen)
@@ -3025,7 +3054,7 @@ function MarketView() {
   const [marketPane, setMarketPane] = useState<'buy' | 'sell'>('buy')
 
   const playerId = getPlayerId()
-  const postable = buildPostableItems(inventory, seeds, materials)
+  const postable = buildPostableItems(inventory, seeds, materials, storageParts)
   const selectedPost = postable[postIndex] ?? null
   const priceBounds = selectedPost
     ? marketPriceBounds(selectedPost.kind, selectedPost.id)
@@ -3540,6 +3569,107 @@ function SellableCell({
   )
 }
 
+function BagCapacityHeader({ pane }: { pane: BagPaneId }) {
+  const bagCapacityLevel = useGame((s) => s.bagCapacityLevel)
+  const storageParts = useGame((s) => s.storageParts)
+  const inventory = useGame((s) => s.inventory)
+  const materials = useGame((s) => s.materials)
+  const seeds = useGame((s) => s.seeds)
+  const saplings = useGame((s) => s.saplings)
+  const gearInventory = useGame((s) => s.gearInventory)
+  const upgradeBagStorage = useGame((s) => s.upgradeBagStorage)
+
+  const slice = {
+    inventory,
+    materials,
+    seeds,
+    saplings,
+    gearInventory,
+    bagCapacityLevel,
+  }
+  const used = bagTabUsage(slice, pane)
+  const max = bagTabCapacity(bagCapacityLevel, pane)
+  const level = bagStorageLevel(bagCapacityLevel, pane)
+  const cost = bagUpgradeCost(bagCapacityLevel, pane)
+  const pct = max > 0 ? Math.min(100, (used / max) * 100) : 0
+  const nearFull = used / max >= 0.85
+  const isFull = used >= max
+
+  return (
+    <div className="bag-capacity">
+      <div className="bag-capacity-head">
+        <span className="bag-capacity-label">{BAG_PANE_LABEL[pane]}</span>
+        <span
+          className={[
+            'bag-capacity-count',
+            nearFull ? 'warn' : '',
+            isFull ? 'full' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+        >
+          {used} / {max}
+        </span>
+      </div>
+      <div
+        className="bag-capacity-bar"
+        role="progressbar"
+        aria-valuenow={used}
+        aria-valuemin={0}
+        aria-valuemax={max}
+        aria-label={`${BAG_PANE_LABEL[pane]} storage`}
+      >
+        <div
+          className={[
+            'bag-capacity-fill',
+            nearFull ? 'warn' : '',
+            isFull ? 'full' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      <div className="bag-upgrade-parts" aria-label="Storage upgrade parts">
+        {STORAGE_PART_IDS.map((id) => {
+          const meta = STORAGE_PART_META[id]
+          const qty = storageParts[id] ?? 0
+          return (
+            <span
+              key={id}
+              className={`bag-part-chip${qty > 0 ? ' owned' : ''}`}
+              title={meta.name}
+            >
+              {meta.emoji} {qty}
+            </span>
+          )
+        })}
+      </div>
+
+      {cost ? (
+        <div className="bag-upgrade-panel">
+          <p className="muted small">
+            Level {level}/{MAX_BAG_STORAGE_LEVEL} · +{BAG_CAPACITY_PER_LEVEL[pane]}{' '}
+            capacity
+          </p>
+          <p className="bag-upgrade-cost">{formatStoragePartCost(cost)}</p>
+          <button
+            type="button"
+            className="btn tiny"
+            disabled={!hasStorageParts(storageParts, cost)}
+            onClick={() => upgradeBagStorage(pane)}
+          >
+            Expand storage
+          </button>
+        </div>
+      ) : (
+        <p className="muted small bag-upgrade-maxed">Storage maxed out</p>
+      )}
+    </div>
+  )
+}
+
 function BagView() {
   const inventory = useGame((s) => s.inventory)
   const materials = useGame((s) => s.materials)
@@ -3549,11 +3679,36 @@ function BagView() {
   const sellSeeds = useGame((s) => s.sellSeeds)
   const sellMaterial = useGame((s) => s.sellMaterial)
   const resetGame = useGame((s) => s.resetGame)
+  const [bagPane, setBagPane] = useState<BagPaneId>('seeds')
   const [pendingSell, setPendingSell] = useState<PendingSell | null>(null)
   const items = Object.entries(inventory).filter(([, n]) => (n ?? 0) > 0)
   const matItems = Object.entries(materials).filter(([, n]) => (n ?? 0) > 0)
   const seedItems = Object.entries(seeds).filter(([, n]) => (n ?? 0) > 0)
   const looseGear = gearInventory.filter((g) => !g.equippedBy)
+
+  const farmItems = items.filter(
+    ([id]) => bagItemCategory(id as ItemId) === 'farm',
+  )
+  const machineItems = items.filter(
+    ([id]) => bagItemCategory(id as ItemId) === 'machine',
+  )
+  const animalItems = items.filter(
+    ([id]) => bagItemCategory(id as ItemId) === 'animal',
+  )
+  const machineMaterials = matItems.filter(
+    ([id]) => bagMaterialCategory(id as MaterialId) === 'machine',
+  )
+  const animalMaterials = matItems.filter(
+    ([id]) => bagMaterialCategory(id as MaterialId) === 'animal',
+  )
+
+  const tabCounts: Record<BagPaneId, number> = {
+    seeds: seedItems.length,
+    farm: farmItems.length,
+    machine: machineItems.length + machineMaterials.length,
+    animal: animalItems.length + animalMaterials.length,
+    gear: looseGear.length,
+  }
 
   const confirmSell = () => {
     if (!pendingSell) return
@@ -3576,113 +3731,219 @@ function BagView() {
         <p>Sell harvests & goods for a fair profit. Orders still pay best.</p>
       </div>
 
-      <h3 className="section-label">Seeds</h3>
-      <div className="inv-grid">
-        {seedItems.length === 0 && <p className="muted">No seeds yet.</p>}
-        {seedItems.map(([id, qty]) => {
-          const crop = CROPS[id as CropId]
-          const count = qty ?? 0
-          return (
-            <SellableCell
-              key={id}
-              emoji={crop?.emoji ?? '🌱'}
-              name={crop?.name ?? id}
-              qty={count}
-              unitPrice={seedSellPrice(id as CropId)}
-              onSell={(amount) =>
-                setPendingSell({
-                  kind: 'seeds',
-                  id,
-                  amount,
-                  emoji: crop?.emoji ?? '🌱',
-                  name: crop?.name ?? id,
-                  unitPrice: seedSellPrice(id as CropId),
-                })
-              }
-            />
-          )
-        })}
+      <div className="pane-tabs pane-tabs-5" role="tablist" aria-label="Bag">
+        {BAG_PANES.map(({ id, label, emoji }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={bagPane === id}
+            className={[
+              bagPane === id ? 'active' : '',
+              tabCounts[id] > 0 && bagPane !== id ? 'has-active' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={() => setBagPane(id)}
+          >
+            {emoji} {label}
+            {tabCounts[id] > 0 ? ` (${tabCounts[id]})` : ''}
+          </button>
+        ))}
       </div>
 
-      <h3 className="section-label">Goods</h3>
-      <div className="inv-grid">
-        {items.length === 0 && <p className="muted">Harvest something!</p>}
-        {items.map(([id, qty]) => {
-          const meta = ITEM_META[id as ItemId]
-          const count = qty ?? 0
-          return (
-            <SellableCell
-              key={id}
-              emoji={meta?.emoji ?? '📦'}
-              name={meta?.name ?? id}
-              qty={count}
-              unitPrice={itemSellPrice(id as ItemId)}
-              onSell={(amount) =>
-                setPendingSell({
-                  kind: 'goods',
-                  id,
-                  amount,
-                  emoji: meta?.emoji ?? '📦',
-                  name: meta?.name ?? id,
-                  unitPrice: itemSellPrice(id as ItemId),
-                })
-              }
-            />
-          )
-        })}
-      </div>
+      <BagCapacityHeader pane={bagPane} />
 
-      <h3 className="section-label">Adventure materials</h3>
-      <div className="inv-grid">
-        {matItems.length === 0 && (
-          <p className="muted">Send parties exploring for ore & essence.</p>
-        )}
-        {matItems.map(([id, qty]) => {
-          const meta = MATERIAL_META[id as keyof typeof MATERIAL_META]
-          const count = qty ?? 0
-          return (
-            <SellableCell
-              key={id}
-              emoji={meta?.emoji ?? '✨'}
-              name={meta?.name ?? id}
-              qty={count}
-              unitPrice={materialSellPrice(id as MaterialId)}
-              onSell={(amount) =>
-                setPendingSell({
-                  kind: 'material',
-                  id,
-                  amount,
-                  emoji: meta?.emoji ?? '✨',
-                  name: meta?.name ?? id,
-                  unitPrice: materialSellPrice(id as MaterialId),
-                })
-              }
-            />
-          )
-        })}
-      </div>
+      {bagPane === 'seeds' && (
+        <div className="inv-grid">
+          {seedItems.length === 0 && <p className="muted">No seeds yet.</p>}
+          {seedItems.map(([id, qty]) => {
+            const crop = CROPS[id as CropId]
+            const count = qty ?? 0
+            return (
+              <SellableCell
+                key={id}
+                emoji={crop?.emoji ?? '🌱'}
+                name={crop?.name ?? id}
+                qty={count}
+                unitPrice={seedSellPrice(id as CropId)}
+                onSell={(amount) =>
+                  setPendingSell({
+                    kind: 'seeds',
+                    id,
+                    amount,
+                    emoji: crop?.emoji ?? '🌱',
+                    name: crop?.name ?? id,
+                    unitPrice: seedSellPrice(id as CropId),
+                  })
+                }
+              />
+            )
+          })}
+        </div>
+      )}
 
-      <h3 className="section-label">Loose gear</h3>
-      <div className="inv-grid">
-        {looseGear.length === 0 && (
-          <p className="muted">Craft gear in Adventure → Workshop.</p>
-        )}
-        {looseGear.map((g) => {
-          const bp = GEAR_BLUEPRINT_BY_ID[g.blueprintId]
-          if (!bp) return null
-          const stats = gearInstanceStats(g)
-          return (
-            <div key={g.id} className="inv-cell">
-              <GearIcon blueprint={bp} />
-              <strong>+{stats.skillBonus}</strong>
-              <small>
-                {bp.name} · {QUALITY_LABEL[gearInstanceQuality(g)]} · Lv{' '}
-                {g.level}
-              </small>
-            </div>
-          )
-        })}
-      </div>
+      {bagPane === 'farm' && (
+        <div className="inv-grid">
+          {farmItems.length === 0 && (
+            <p className="muted">No farm harvests — plant crops or orchard trees.</p>
+          )}
+          {farmItems.map(([id, qty]) => {
+            const meta = ITEM_META[id as ItemId]
+            const count = qty ?? 0
+            return (
+              <SellableCell
+                key={id}
+                emoji={meta?.emoji ?? '🌾'}
+                name={meta?.name ?? id}
+                qty={count}
+                unitPrice={itemSellPrice(id as ItemId)}
+                onSell={(amount) =>
+                  setPendingSell({
+                    kind: 'goods',
+                    id,
+                    amount,
+                    emoji: meta?.emoji ?? '🌾',
+                    name: meta?.name ?? id,
+                    unitPrice: itemSellPrice(id as ItemId),
+                  })
+                }
+              />
+            )
+          })}
+        </div>
+      )}
+
+      {bagPane === 'machine' && (
+        <div className="inv-grid">
+          {machineItems.length === 0 && machineMaterials.length === 0 && (
+            <p className="muted">No crafted goods or gathered materials yet.</p>
+          )}
+          {machineItems.map(([id, qty]) => {
+            const meta = ITEM_META[id as ItemId]
+            const count = qty ?? 0
+            return (
+              <SellableCell
+                key={id}
+                emoji={meta?.emoji ?? '📦'}
+                name={meta?.name ?? id}
+                qty={count}
+                unitPrice={itemSellPrice(id as ItemId)}
+                onSell={(amount) =>
+                  setPendingSell({
+                    kind: 'goods',
+                    id,
+                    amount,
+                    emoji: meta?.emoji ?? '📦',
+                    name: meta?.name ?? id,
+                    unitPrice: itemSellPrice(id as ItemId),
+                  })
+                }
+              />
+            )
+          })}
+          {machineMaterials.map(([id, qty]) => {
+            const meta = MATERIAL_META[id as keyof typeof MATERIAL_META]
+            const count = qty ?? 0
+            return (
+              <SellableCell
+                key={id}
+                emoji={meta?.emoji ?? '✨'}
+                name={meta?.name ?? id}
+                qty={count}
+                unitPrice={materialSellPrice(id as MaterialId)}
+                onSell={(amount) =>
+                  setPendingSell({
+                    kind: 'material',
+                    id,
+                    amount,
+                    emoji: meta?.emoji ?? '✨',
+                    name: meta?.name ?? id,
+                    unitPrice: materialSellPrice(id as MaterialId),
+                  })
+                }
+              />
+            )
+          })}
+        </div>
+      )}
+
+      {bagPane === 'animal' && (
+        <div className="inv-grid">
+          {animalItems.length === 0 && animalMaterials.length === 0 && (
+            <p className="muted">No animal products yet — collect from your pens.</p>
+          )}
+          {animalItems.map(([id, qty]) => {
+            const meta = ITEM_META[id as ItemId]
+            const count = qty ?? 0
+            return (
+              <SellableCell
+                key={id}
+                emoji={meta?.emoji ?? '🥚'}
+                name={meta?.name ?? id}
+                qty={count}
+                unitPrice={itemSellPrice(id as ItemId)}
+                onSell={(amount) =>
+                  setPendingSell({
+                    kind: 'goods',
+                    id,
+                    amount,
+                    emoji: meta?.emoji ?? '🥚',
+                    name: meta?.name ?? id,
+                    unitPrice: itemSellPrice(id as ItemId),
+                  })
+                }
+              />
+            )
+          })}
+          {animalMaterials.map(([id, qty]) => {
+            const meta = MATERIAL_META[id as keyof typeof MATERIAL_META]
+            const count = qty ?? 0
+            return (
+              <SellableCell
+                key={id}
+                emoji={meta?.emoji ?? '🐾'}
+                name={meta?.name ?? id}
+                qty={count}
+                unitPrice={materialSellPrice(id as MaterialId)}
+                onSell={(amount) =>
+                  setPendingSell({
+                    kind: 'material',
+                    id,
+                    amount,
+                    emoji: meta?.emoji ?? '🐾',
+                    name: meta?.name ?? id,
+                    unitPrice: materialSellPrice(id as MaterialId),
+                  })
+                }
+              />
+            )
+          })}
+        </div>
+      )}
+
+      {bagPane === 'gear' && (
+        <div className="inv-grid">
+          {looseGear.length === 0 && (
+            <p className="muted">Craft gear in Adventure → Workshop.</p>
+          )}
+          {looseGear.map((g) => {
+            const bp = GEAR_BLUEPRINT_BY_ID[g.blueprintId]
+            if (!bp) return null
+            const stats = gearInstanceStats(g)
+            return (
+              <div key={g.id} className="inv-cell">
+                <GearIcon blueprint={bp} />
+                <strong>+{stats.skillBonus}</strong>
+                <small>
+                  {bp.name} · {QUALITY_LABEL[gearInstanceQuality(g)]} · Lv{' '}
+                  {g.level}
+                </small>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       <button
         type="button"
@@ -3839,6 +4100,7 @@ function RecruitCard({
 
 function ShopSeedPane() {
   const coins = useGame((s) => s.coins)
+  const seeds = useGame((s) => s.seeds)
   const buySeed = useGame((s) => s.buySeed)
   const isCropAvailable = useGame((s) => s.isCropAvailable)
   const guideItemHighlights = useGame((s) => s.guideItemHighlights)
@@ -3859,6 +4121,7 @@ function ShopSeedPane() {
     <div className="card-list">
       {SORTED_CROP_LIST.map((crop) => {
         const locked = !isCropAvailable(crop.id)
+        const owned = seeds[crop.id] ?? 0
         return (
           <div
             key={crop.id}
@@ -3874,6 +4137,11 @@ function ShopSeedPane() {
                     ? '🔒 Unlock via missions'
                     : `Grows in ${formatLeft(crop.growMs)} · ×${crop.harvestQty}`}
                 </p>
+                {!locked && (
+                  <p className="shop-owned-count">
+                    You have <strong>{owned}</strong> seed{owned === 1 ? '' : 's'}
+                  </p>
+                )}
               </div>
             </div>
             <button
@@ -3893,6 +4161,7 @@ function ShopSeedPane() {
 
 function ShopTreePane() {
   const coins = useGame((s) => s.coins)
+  const saplings = useGame((s) => s.saplings)
   const buySapling = useGame((s) => s.buySapling)
   const isTreeAvailable = useGame((s) => s.isTreeAvailable)
   const guideItemHighlights = useGame((s) => s.guideItemHighlights)
@@ -3913,6 +4182,7 @@ function ShopTreePane() {
     <div className="card-list">
       {SORTED_TREE_LIST.map((tree) => {
         const locked = !isTreeAvailable(tree.id)
+        const owned = saplings[tree.id] ?? 0
         const productMeta = ITEM_META[tree.product]
         return (
           <div
@@ -3929,6 +4199,11 @@ function ShopTreePane() {
                     ? `🔒 Level ${tree.unlockLevel}`
                     : `Yields ${productMeta.emoji} ${productMeta.name} · ${formatLeft(tree.growMs)} · ×${tree.harvestQty} · tree persists`}
                 </p>
+                {!locked && (
+                  <p className="shop-owned-count">
+                    You have <strong>{owned}</strong> sapling{owned === 1 ? '' : 's'}
+                  </p>
+                )}
               </div>
             </div>
             <button

@@ -116,6 +116,9 @@ export type MaterialId =
   | 'magic_essence'
   | 'sunstone'
 
+/** Barn expansion parts — drop from orders, shipments, adventures, market. */
+export type StoragePartId = 'storage_nail' | 'storage_screw' | 'storage_tape'
+
 export type ItemId = CropId | TreeProductId | AnimalProductId | CraftedId
 
 export type CraftResourceId = ItemId | MaterialId

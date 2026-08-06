@@ -1,4 +1,7 @@
-import type { OrderDef } from '../types'
+import { itemObtainLevel } from './unlockOrder'
+import type { ActiveOrder, ItemId, OrderDef } from '../types'
+
+export const ORDER_SLOTS = 3
 
 export const ORDERS: OrderDef[] = [
   {
@@ -155,3 +158,67 @@ export const ORDERS: OrderDef[] = [
     unlockLevel: 6,
   },
 ]
+
+export function orderObtainLevel(needs: Partial<Record<ItemId, number>>): number {
+  const ids = Object.keys(needs) as ItemId[]
+  if (ids.length === 0) return 1
+  return Math.max(...ids.map(itemObtainLevel))
+}
+
+export function isOrderObtainableAtLevel(
+  order: OrderDef,
+  playerLevel: number,
+): boolean {
+  return (
+    order.unlockLevel <= playerLevel &&
+    orderObtainLevel(order.needs) <= playerLevel
+  )
+}
+
+export function ordersAvailableAtLevel(
+  level: number,
+  exclude: string[] = [],
+): OrderDef[] {
+  return ORDERS.filter(
+    (o) => isOrderObtainableAtLevel(o, level) && !exclude.includes(o.id),
+  )
+}
+
+export function pickActiveOrders(
+  level: number,
+  exclude: string[] = [],
+): ActiveOrder[] {
+  const pool = ordersAvailableAtLevel(level, exclude)
+  const fallback = ordersAvailableAtLevel(level)
+  const source = pool.length >= ORDER_SLOTS ? pool : fallback
+  const shuffled = [...source].sort(() => Math.random() - 0.5)
+  return shuffled.slice(0, ORDER_SLOTS).map((o, slot) => ({
+    orderId: o.id,
+    slot,
+  }))
+}
+
+export function pickReplacementOrderId(
+  level: number,
+  exclude: string[],
+): string | null {
+  const available = ordersAvailableAtLevel(level)
+  const fresh = available.filter((o) => !exclude.includes(o.id))
+  const pool = fresh.length > 0 ? fresh : available
+  if (pool.length === 0) return null
+  return pool[Math.floor(Math.random() * pool.length)]!.id
+}
+
+export function orderDefById(orderId: string): OrderDef | undefined {
+  return ORDERS.find((o) => o.id === orderId)
+}
+
+export function hasInvalidActiveOrders(
+  activeOrders: ActiveOrder[],
+  level: number,
+): boolean {
+  return activeOrders.some((o) => {
+    const def = orderDefById(o.orderId)
+    return !def || !isOrderObtainableAtLevel(def, level)
+  })
+}

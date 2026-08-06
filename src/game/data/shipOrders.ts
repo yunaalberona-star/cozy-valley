@@ -1,5 +1,6 @@
 import { ITEM_META } from './buildings'
 import { itemSellPrice } from './sellPrices'
+import { itemObtainLevel } from './unlockOrder'
 import type { ActiveShipOrder, ItemId } from '../types'
 
 export const SHIP_SLOTS = 6
@@ -81,11 +82,27 @@ function shipRewards(itemId: ItemId, qty: number, minLevel: number) {
   }
 }
 
+function shipItemObtainable(template: ShipItemTemplate, playerLevel: number): boolean {
+  return (
+    template.minLevel <= playerLevel &&
+    itemObtainLevel(template.itemId) <= playerLevel
+  )
+}
+
+export function hasInvalidShipOrders(
+  orders: ActiveShipOrder[],
+  playerLevel: number,
+): boolean {
+  return orders.some(
+    (o) => !o.filled && itemObtainLevel(o.itemId) > playerLevel,
+  )
+}
+
 export function rollShipOrders(
   playerLevel: number,
   periodKey = shipPeriodKey(),
 ): ActiveShipOrder[] {
-  const eligible = SHIP_POOL.filter((t) => t.minLevel <= playerLevel)
+  const eligible = SHIP_POOL.filter((t) => shipItemObtainable(t, playerLevel))
   if (eligible.length === 0) return []
 
   const rand = mulberry32(hashPeriodKey(`ship:${periodKey}:${playerLevel}`))

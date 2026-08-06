@@ -1,6 +1,7 @@
 import type { EventDef, MissionDef } from '../types'
 import {
   buildMissionChain,
+  MISSION_CHAIN_MAX_LEVEL,
   pickNextMission,
   resolveActiveMission,
   resolveActiveMissionIds,
@@ -9,14 +10,15 @@ import {
 } from './missionChain'
 
 /**
- * Story missions scale to level 50 — machines & animals unlock by player level.
+ * Story missions scale to {@link MISSION_CHAIN_MAX_LEVEL} — machines & animals unlock by player level.
  * Chapter-based narrative like Family Farm Seaside; rewards are coins/XP only.
  */
-export const MISSIONS: MissionDef[] = buildMissionChain(50)
+export const MISSIONS: MissionDef[] = buildMissionChain()
 
 export const MISSION_BY_ID = Object.fromEntries(MISSIONS.map((m) => [m.id, m]))
 
 export {
+  MISSION_CHAIN_MAX_LEVEL,
   pickNextMission,
   resolveActiveMission,
   resolveActiveMissionIds,

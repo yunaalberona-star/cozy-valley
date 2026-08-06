@@ -1,9 +1,10 @@
+import { ANIMALS } from './animals'
 import { ANIMAL_BUILDINGS } from './animalBuildings'
 import { BUILDINGS, RECIPES } from './buildings'
 import type { AnimalBuildingDef, BuildingDef, BuildingId, CraftResourceId, ItemId, MaterialId, RecipeDef, TreeProductId } from '../types'
 import { CROPS } from './crops'
-import { treeProductLevel } from './trees'
-import { BUILDING_LEVEL_UNLOCKS } from './levelUnlocks'
+import { treeProductLevel, TREES } from './trees'
+import { BUILDING_LEVEL_UNLOCKS, buildingUnlockLevel } from './levelUnlocks'
 
 const ANIMAL_PRODUCT_LEVEL: Partial<Record<ItemId, number>> = {
   egg: 2,
@@ -152,4 +153,64 @@ export function isRecipeUnlocked(
   playerLevel: number,
 ): boolean {
   return playerLevel >= recipeUnlockLevel(recipeId)
+}
+
+function recipeInputLevel(
+  id: CraftResourceId,
+  levels: Partial<Record<ItemId, number>>,
+): number {
+  if (levels[id as ItemId] != null) return levels[id as ItemId]!
+  return inputItemLevel(id, levels)
+}
+
+/** Minimum player level to obtain each item (crops, animals, crafts, machines). */
+function buildItemObtainLevels(): Partial<Record<ItemId, number>> {
+  const levels: Partial<Record<ItemId, number>> = {}
+
+  const setMin = (id: ItemId, level: number) => {
+    const cur = levels[id]
+    if (cur == null || level < cur) levels[id] = level
+  }
+
+  for (const crop of Object.values(CROPS)) {
+    setMin(crop.id, crop.unlockLevel)
+  }
+
+  for (const tree of Object.values(TREES)) {
+    setMin(tree.product, tree.unlockLevel)
+  }
+
+  for (const animal of Object.values(ANIMALS)) {
+    if (animal.product) {
+      setMin(animal.product, buildingUnlockLevel(animal.buildingId))
+    }
+  }
+
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const recipe of RECIPES) {
+      if (!recipe.output) continue
+      const need = Math.max(
+        buildingUnlockLevel(recipe.buildingId),
+        1,
+        ...Object.keys(recipe.inputs).map((id) =>
+          recipeInputLevel(id as CraftResourceId, levels),
+        ),
+      )
+      const prev = levels[recipe.output]
+      if (prev == null || need < prev) {
+        levels[recipe.output] = need
+        changed = true
+      }
+    }
+  }
+
+  return levels
+}
+
+export const ITEM_OBTAIN_LEVEL = buildItemObtainLevels()
+
+export function itemObtainLevel(itemId: ItemId): number {
+  return ITEM_OBTAIN_LEVEL[itemId] ?? 99
 }
